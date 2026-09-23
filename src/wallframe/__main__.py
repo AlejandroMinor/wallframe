@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Drag and zoom the wallpaper inside each monitor's frame, then apply it.
 
 Shows the image each monitor is displaying, with that monitor's frame on top.
@@ -11,7 +10,7 @@ touched and keeps the window open; Esc closes it.
 The result is cropped to the exact output size and handed to awww (or swww)
 for that monitor only.
 
-    wallframe.py [MONITOR]
+    python -m wallframe [MONITOR]
 """
 
 import json
@@ -29,6 +28,8 @@ gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 from PIL import Image  # noqa: E402
 
+from .framing import MAX_ZOOM, Framing  # noqa: E402
+
 APP_ID = "io.github.AlejandroMinor.wallframe"
 # Not ~/.cache: the crop is the wallpaper itself, and awww reloads it from this
 # path on every login, so a cache cleaner would leave the monitor blank.
@@ -40,7 +41,6 @@ STATE = os.path.join(OUT_DIR, "state.json")
 PREVIEW_MAX = 2048   # longest side of the on-screen copy; the crop uses the original
 MARGIN = 60          # canvas space around the frame, to see what is left out
 ZOOM_STEP = 1.1
-MAX_ZOOM = 8.0       # relative to the zoom that just covers the monitor
 
 
 def run(cmd):
@@ -123,91 +123,50 @@ def to_surface(img):
 
 
 class Target:
-    """One monitor: its size, the image and where that image sits on it.
-
-    Positions are in monitor pixels: the image is drawn at (x, y) scaled by
-    `zoom`, so the monitor shows the image region starting at (-x/zoom, -y/zoom).
-    img_w and img_h are the size after mirroring and rotating.
-    """
+    """One monitor: its name and size, the image and how that image is framed on it."""
 
     def __init__(self, name, width, height, shown, state):
         saved = state.get(name, {})
         resume = saved.get("crop") == shown and os.path.exists(saved.get("source", ""))
         image = saved["source"] if resume else shown
         self.name, self.width, self.height, self.image = name, width, height, image
-        self.flip_h = saved.get("flip_h", False) if resume else False
-        self.flip_v = saved.get("flip_v", False) if resume else False
-        self.rotation = saved.get("rotation", 0) if resume else 0  # degrees clockwise
         with Image.open(image) as img:
+            self.framing = Framing(width, height, *img.size)
             img.thumbnail((PREVIEW_MAX, PREVIEW_MAX))
             self.thumb = img.convert("RGBA")
-        self.refresh()
-        self.recentre()
         if resume:
-            self.zoom = self.min_zoom * saved["zoom"]
-            self.x, self.y = saved["x"], saved["y"]
-            self.clamp()
+            self.framing.restore(saved)
+        self.refresh()
         # What the monitor shows right now; the dot marks any difference from it.
-        self.applied = self.framing()
-
-    def framing(self):
-        """The edit as comparable values, rounded so float noise is not a change."""
-        return (self.flip_h, self.flip_v, self.rotation,
-                round(self.zoom / self.min_zoom, 4), round(self.x, 1), round(self.y, 1))
+        self.applied = self.framing.key()
 
     @property
     def touched(self):
-        return self.framing() != self.applied
+        return self.framing.key() != self.applied
 
     def transform(self, img):
         """Applies the mirror and rotation, in the same order for preview and crop."""
-        if self.flip_h:
+        f = self.framing
+        if f.flip_h:
             img = img.transpose(Image.FLIP_LEFT_RIGHT)
-        if self.flip_v:
+        if f.flip_v:
             img = img.transpose(Image.FLIP_TOP_BOTTOM)
         # PIL rotates counter-clockwise.
         steps = {90: Image.ROTATE_270, 180: Image.ROTATE_180, 270: Image.ROTATE_90}
-        return img.transpose(steps[self.rotation]) if self.rotation else img
+        return img.transpose(steps[f.rotation]) if f.rotation else img
 
     def refresh(self):
-        """Rebuilds the preview and the transformed size after a flip or turn."""
-        with Image.open(self.image) as img:
-            w, h = img.size
-        if self.rotation in (90, 270):
-            w, h = h, w
-        self.img_w, self.img_h = w, h
+        """Rebuilds the preview after a flip or turn."""
         self.preview = to_surface(self.transform(self.thumb))
-        self.preview_scale = self.preview.get_width() / self.img_w
-        self.min_zoom = max(self.width / w, self.height / h)
+        self.preview_scale = self.preview.get_width() / self.framing.image_w
 
-    def recentre(self):
-        """Covers the monitor, centred: the framing the daemon's crop starts from."""
-        self.zoom = self.min_zoom
-        self.x = (self.width - self.img_w * self.zoom) / 2
-        self.y = (self.height - self.img_h * self.zoom) / 2
-
-    def mirror(self, horizontal):
-        """Flips the image in place, so the frame shows the same part mirrored."""
-        if horizontal:
-            self.flip_h = not self.flip_h
-            self.x = self.width - self.img_w * self.zoom - self.x
-        else:
-            self.flip_v = not self.flip_v
-            self.y = self.height - self.img_h * self.zoom - self.y
+    def edit(self, action):
+        """Runs a mirror, flip, rotate or reset on the framing and updates the preview."""
+        {"mirror": lambda: self.framing.mirror(horizontal=True),
+         "flip": lambda: self.framing.mirror(horizontal=False),
+         "rotate": self.framing.rotate,
+         "reset": self.framing.reset}[action]()
         self.refresh()
-
-    def rotate(self):
-        """Turns 90 degrees clockwise; the proportions change, so it recentres."""
-        self.rotation = (self.rotation + 90) % 360
-        self.refresh()
-        self.recentre()
-
-    def reset(self):
-        """Back to the starting framing: centred, no mirror, no rotation."""
-        self.flip_h = self.flip_v = False
-        self.rotation = 0
-        self.refresh()
-        self.recentre()
 
     @property
     def orientation(self):
@@ -217,26 +176,8 @@ class Target:
     def icon(self):
         return "phone-symbolic" if self.height > self.width else "video-display-symbolic"
 
-    def clamp(self):
-        """Keeps the image covering the whole monitor, so no bars show."""
-        self.zoom = min(max(self.zoom, self.min_zoom), self.min_zoom * MAX_ZOOM)
-        self.x = min(0, max(self.x, self.width - self.img_w * self.zoom))
-        self.y = min(0, max(self.y, self.height - self.img_h * self.zoom))
-
-    def zoom_at(self, factor, px, py):
-        """Zooms keeping the monitor point (px, py) over the same image spot."""
-        old = self.zoom
-        self.zoom *= factor
-        self.clamp()
-        k = self.zoom / old
-        self.x = px - (px - self.x) * k
-        self.y = py - (py - self.y) * k
-        self.clamp()
-
     def render(self):
         """Crops the original image to this framing, at native output size."""
-        left, top = -self.x / self.zoom, -self.y / self.zoom
-        box = (left, top, left + self.width / self.zoom, top + self.height / self.zoom)
         os.makedirs(OUT_DIR, exist_ok=True)
         # The daemon caches by path, so a reused name would bring back the old crop.
         for old in os.listdir(OUT_DIR):
@@ -245,12 +186,9 @@ class Target:
         path = os.path.join(OUT_DIR, f"{self.name}-{int(time.time())}.png")
         with Image.open(self.image) as img:
             self.transform(img.convert("RGB")).resize(
-                (self.width, self.height), Image.LANCZOS, box=box).save(path)
+                (self.width, self.height), Image.LANCZOS, box=self.framing.crop_box()).save(path)
         state = load_state()
-        state[self.name] = {"crop": path, "source": self.image,
-                            "zoom": self.zoom / self.min_zoom, "x": self.x, "y": self.y,
-                            "flip_h": self.flip_h, "flip_v": self.flip_v,
-                            "rotation": self.rotation}
+        state[self.name] = {"crop": path, "source": self.image, **self.framing.to_dict()}
         with open(STATE, "w") as f:
             json.dump(state, f, indent=2)
         return path
@@ -378,14 +316,15 @@ class Window(Gtk.ApplicationWindow):
 
     def draw(self, _area, cr, aw, ah):
         t = self.target
+        f = t.framing
         scale, fx, fy = self.frame()
         cr.set_source_rgb(0.08, 0.08, 0.08)
         cr.paint()
 
         # The whole image, at its current position relative to the frame.
         cr.save()
-        cr.translate(fx + t.x * scale, fy + t.y * scale)
-        s = t.zoom * scale / t.preview_scale
+        cr.translate(fx + f.x * scale, fy + f.y * scale)
+        s = f.zoom * scale / t.preview_scale
         cr.scale(s, s)
         cr.set_source_surface(t.preview, 0, 0)
         cr.paint()
@@ -429,28 +368,20 @@ class Window(Gtk.ApplicationWindow):
             mark = "● " if t.touched else ""
             button.name_label.set_label(f"{mark}{t.name}")
         t = self.target
-        pct = round(t.zoom / t.min_zoom * 100)
+        pct = round(t.framing.relative_zoom * 100)
         self.syncing = True
         self.zoom_scale.set_value(pct)
         self.syncing = False
         self.zoom_label.set_label(f"{pct}%")
         details = [t.model, f"{t.width}x{t.height}", t.orientation,
-                   "mirrored" if t.flip_h else "", "flipped" if t.flip_v else "",
-                   f"rotated {t.rotation}°" if t.rotation else ""]
+                   "mirrored" if t.framing.flip_h else "", "flipped" if t.framing.flip_v else "",
+                   f"rotated {t.framing.rotation}°" if t.framing.rotation else ""]
         self.label.set_markup(f"<b>{GLib.markup_escape_text(t.name)}</b>   "
                               + GLib.markup_escape_text("  ·  ".join(filter(None, details))))
         self.area.queue_draw()
 
     def transform(self, action):
-        t = self.target
-        if action == "mirror":
-            t.mirror(horizontal=True)
-        elif action == "flip":
-            t.mirror(horizontal=False)
-        elif action == "rotate":
-            t.rotate()
-        else:
-            t.reset()
+        self.target.edit(action)
         self.refresh()
 
     def on_grid_button(self):
@@ -462,24 +393,23 @@ class Window(Gtk.ApplicationWindow):
             return
         t = self.target
         # Zoom around the frame's centre, as there is no pointer to anchor to.
-        t.zoom_at(scale.get_value() / 100 * t.min_zoom / t.zoom, t.width / 2, t.height / 2)
+        t.framing.zoom_at(scale.get_value() / 100 / t.framing.relative_zoom,
+                          t.width / 2, t.height / 2)
         self.refresh()
 
     def on_drag_begin(self, _gesture, _x, _y):
-        self.drag_origin = (self.target.x, self.target.y)
+        self.drag_origin = (self.target.framing.x, self.target.framing.y)
 
     def on_drag_update(self, _gesture, dx, dy):
         scale, _, _ = self.frame()
-        t = self.target
-        t.x = self.drag_origin[0] + dx / scale
-        t.y = self.drag_origin[1] + dy / scale
-        t.clamp()
+        self.target.framing.move_to(self.drag_origin[0] + dx / scale,
+                                    self.drag_origin[1] + dy / scale)
         self.refresh()
 
     def on_scroll(self, _controller, _dx, dy):
         scale, fx, fy = self.frame()
         px, py = (self.pointer[0] - fx) / scale, (self.pointer[1] - fy) / scale
-        self.target.zoom_at(ZOOM_STEP ** -dy, px, py)
+        self.target.framing.zoom_at(ZOOM_STEP ** -dy, px, py)
         self.refresh()
         return True
 
@@ -510,7 +440,7 @@ class Window(Gtk.ApplicationWindow):
             subprocess.run([self.daemon, "img", "-o", t.name, "--resize", "no",
                             "--transition-type", "fade", "--transition-duration", "0.4",
                             t.render()])
-            t.applied = t.framing()
+            t.applied = t.framing.key()
         self.refresh()
         self.flash("Applied")
 
