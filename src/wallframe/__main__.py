@@ -14,11 +14,9 @@ for that monitor only.
 """
 
 import json
-import os
 import re
 import subprocess
 import sys
-import time
 
 import cairo
 import gi
@@ -26,18 +24,12 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, GLib, Gtk  # noqa: E402
-from PIL import Image  # noqa: E402
 
+from . import render  # noqa: E402
 from .framing import MAX_ZOOM, Framing  # noqa: E402
+from .state import Store  # noqa: E402
 
 APP_ID = "io.github.AlejandroMinor.wallframe"
-# Not ~/.cache: the crop is the wallpaper itself, and awww reloads it from this
-# path on every login, so a cache cleaner would leave the monitor blank.
-OUT_DIR = os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"),
-                       "wallframe")
-# Crop -> source image and framing, so reopening resumes from the original
-# instead of cropping the crop again.
-STATE = os.path.join(OUT_DIR, "state.json")
 PREVIEW_MAX = 2048   # longest side of the on-screen copy; the crop uses the original
 MARGIN = 60          # canvas space around the frame, to see what is left out
 ZOOM_STEP = 1.1
@@ -72,14 +64,6 @@ def daemon_outputs():
         if found:
             return daemon, found
     return None, []
-
-
-def load_state():
-    try:
-        with open(STATE) as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return {}
 
 
 def compositor_outputs():
@@ -125,16 +109,12 @@ def to_surface(img):
 class Target:
     """One monitor: its name and size, the image and how that image is framed on it."""
 
-    def __init__(self, name, width, height, shown, state):
-        saved = state.get(name, {})
-        resume = saved.get("crop") == shown and os.path.exists(saved.get("source", ""))
-        image = saved["source"] if resume else shown
-        self.name, self.width, self.height, self.image = name, width, height, image
-        with Image.open(image) as img:
-            self.framing = Framing(width, height, *img.size)
-            img.thumbnail((PREVIEW_MAX, PREVIEW_MAX))
-            self.thumb = img.convert("RGBA")
-        if resume:
+    def __init__(self, name, width, height, shown, store):
+        self.name, self.width, self.height, self.store = name, width, height, store
+        self.image, saved = store.resume(name, shown)
+        self.framing = Framing(width, height, *render.image_size(self.image))
+        self.thumb = render.thumbnail(self.image, PREVIEW_MAX)
+        if saved:
             self.framing.restore(saved)
         self.refresh()
         # What the monitor shows right now; the dot marks any difference from it.
@@ -144,20 +124,9 @@ class Target:
     def touched(self):
         return self.framing.key() != self.applied
 
-    def transform(self, img):
-        """Applies the mirror and rotation, in the same order for preview and crop."""
-        f = self.framing
-        if f.flip_h:
-            img = img.transpose(Image.FLIP_LEFT_RIGHT)
-        if f.flip_v:
-            img = img.transpose(Image.FLIP_TOP_BOTTOM)
-        # PIL rotates counter-clockwise.
-        steps = {90: Image.ROTATE_270, 180: Image.ROTATE_180, 270: Image.ROTATE_90}
-        return img.transpose(steps[f.rotation]) if f.rotation else img
-
     def refresh(self):
         """Rebuilds the preview after a flip or turn."""
-        self.preview = to_surface(self.transform(self.thumb))
+        self.preview = to_surface(render.transform(self.thumb, self.framing))
         self.preview_scale = self.preview.get_width() / self.framing.image_w
 
     def edit(self, action):
@@ -177,20 +146,10 @@ class Target:
         return "phone-symbolic" if self.height > self.width else "video-display-symbolic"
 
     def render(self):
-        """Crops the original image to this framing, at native output size."""
-        os.makedirs(OUT_DIR, exist_ok=True)
-        # The daemon caches by path, so a reused name would bring back the old crop.
-        for old in os.listdir(OUT_DIR):
-            if old.startswith(self.name + "-") and old.endswith(".png"):
-                os.remove(os.path.join(OUT_DIR, old))
-        path = os.path.join(OUT_DIR, f"{self.name}-{int(time.time())}.png")
-        with Image.open(self.image) as img:
-            self.transform(img.convert("RGB")).resize(
-                (self.width, self.height), Image.LANCZOS, box=self.framing.crop_box()).save(path)
-        state = load_state()
-        state[self.name] = {"crop": path, "source": self.image, **self.framing.to_dict()}
-        with open(STATE, "w") as f:
-            json.dump(state, f, indent=2)
+        """Crops the original image to this framing and records it; returns the crop path."""
+        path = self.store.new_crop_path(self.name)
+        render.crop(self.image, self.framing, path)
+        self.store.remember(self.name, path, self.image, self.framing)
         return path
 
 
@@ -456,16 +415,9 @@ def main():
         notify("No image wallpaper found.")
         return 1
 
-    state = load_state()
-    targets = []
-    for name, width, height, image in outputs:
-        try:
-            with Image.open(image) as img:
-                if getattr(img, "is_animated", False):
-                    continue  # a single cropped frame would freeze the animation
-            targets.append(Target(name, width, height, image, state))
-        except OSError:
-            continue  # not an image (video wallpaper)
+    store = Store()
+    targets = [Target(name, width, height, image, store)
+               for name, width, height, image in outputs if render.is_still_image(image)]
     if not targets:
         notify("Animated and video wallpapers cannot be adjusted.")
         return 1
