@@ -6,6 +6,7 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("Pango", "1.0")
 from gi.repository import Gdk, GLib, Gtk, Pango  # noqa: E402
 
+from . import render  # noqa: E402
 from .framing import MAX_ZOOM  # noqa: E402
 
 APP_ID = "io.github.AlejandroMinor.wallframe"
@@ -47,9 +48,12 @@ class Window(Gtk.ApplicationWindow):
     def __init__(self, app, monitors, daemon, start, focused):
         super().__init__(application=app, title="wallframe")
         self.monitors, self.daemon, self.index = monitors, daemon, start
-        self.previews = {}    # monitor name -> (mirror and rotation, cairo surface)
+        self.previews = {}    # monitor name -> (image, mirror and rotation, cairo surface)
         self.show_grid = True
         self.syncing = False  # set while code moves the zoom slider
+        self.asking = False   # set while wallpaper-change questions are on screen
+        self.postponed = set()  # (monitor, image) questions closed with Esc
+        self.flash_timer = None
 
         # Size against the monitor the window opens on; without knowing which,
         # the smallest one, so it fits wherever it lands.
@@ -67,6 +71,8 @@ class Window(Gtk.ApplicationWindow):
         box.append(self.build_bottom_bar())
         self.set_child(box)
         self.connect_input()
+        # Coming back to the window is when a wallpaper changed elsewhere shows up.
+        self.connect("notify::is-active", self.on_active)
         self.select(start)
 
     def build_top_bar(self):
@@ -156,9 +162,9 @@ class Window(Gtk.ApplicationWindow):
         return self.monitors[self.index]
 
     def preview(self, monitor):
-        """The monitor's preview surface, rebuilt only after a mirror or rotation."""
+        """The monitor's preview surface, rebuilt when the image, mirror or rotation change."""
         framing = monitor.framing
-        key = (framing.flip_h, framing.flip_v, framing.rotation)
+        key = (monitor.image, framing.flip_h, framing.flip_v, framing.rotation)
         cached = self.previews.get(monitor.name)
         if not cached or cached[0] != key:
             cached = self.previews[monitor.name] = (key, to_surface(monitor.preview()))
@@ -288,7 +294,16 @@ class Window(Gtk.ApplicationWindow):
             return False
         return True
 
+    def on_active(self, _window, _prop):
+        if self.is_active() and not self.asking:
+            self.sync_with_daemon(ask_postponed=False)
+
     def apply(self):
+        """Checks for wallpapers changed elsewhere first, so none is overwritten unasked."""
+        if not self.asking:
+            self.sync_with_daemon(then=self.apply_touched)
+
+    def apply_touched(self):
         touched = [m for m in self.monitors if m.touched]
         if not touched:
             self.flash("Nothing to apply")
@@ -298,7 +313,74 @@ class Window(Gtk.ApplicationWindow):
         self.refresh()
         self.flash("Applied")
 
+    def sync_with_daemon(self, then=None, ask_postponed=True):
+        """Reloads monitors whose wallpaper changed elsewhere; asks about edited ones.
+
+        `then` runs once every question is answered, and not at all if one is dismissed.
+        """
+        current = {output.name: output for output in self.daemon.outputs()}
+        conflicts, reloaded = [], []
+        for monitor in self.monitors:
+            output = current.get(monitor.name)
+            if not output or not monitor.changed(output.image):
+                continue
+            if monitor.touched or not render.is_still_image(output.image):
+                if ask_postponed or (monitor.name, output.image) not in self.postponed:
+                    conflicts.append((monitor, output))
+            else:
+                monitor.load(output)
+                reloaded.append(monitor.name)
+        self.refresh()
+        if reloaded:
+            self.flash(f"New wallpaper loaded on {', '.join(reloaded)}")
+        self.ask_next(conflicts, then)
+
+    def ask_next(self, conflicts, then):
+        """Asks about each conflict in turn, then runs `then`."""
+        if not conflicts:
+            self.asking = False
+            if then:
+                then()
+            return
+        self.asking = True
+        monitor, output = conflicts[0]
+        loadable = render.is_still_image(output.image)
+        dialog = Gtk.AlertDialog(
+            message=f"{monitor.name} has a new wallpaper",
+            detail="Your changes on this monitor are for the previous image."
+                   if loadable else
+                   "It is animated or a video, so wallframe cannot edit it.",
+            buttons=["Load new wallpaper" if loadable else "Keep the new wallpaper",
+                     "Keep editing (Apply will replace it)"],
+            default_button=0)
+
+        def answered(dialog, result):
+            try:
+                choice = dialog.choose_finish(result)
+            except GLib.Error:  # closed with Esc: ask again on Apply, apply nothing now
+                self.postponed.add((monitor.name, output.image))
+                self.asking = False
+                return
+            if choice == 1:
+                monitor.ignored = output.image
+            elif loadable:
+                monitor.load(output)
+            else:
+                monitor.ignored = output.image
+                monitor.discard_edit()
+            self.refresh()
+            self.ask_next(conflicts[1:], then)
+
+        dialog.choose(self, None, answered)
+
     def flash(self, text):
         """Shows a short message in the status bar, then restores it."""
         self.label.set_markup(f"<b>{GLib.markup_escape_text(text)}</b>")
-        GLib.timeout_add(1500, lambda: self.refresh() or False)
+        if self.flash_timer:
+            GLib.source_remove(self.flash_timer)  # a newer message gets its full time
+        self.flash_timer = GLib.timeout_add(1500, self.restore_status)
+
+    def restore_status(self):
+        self.flash_timer = None
+        self.refresh()
+        return False  # run once; True would repeat every 1500 ms

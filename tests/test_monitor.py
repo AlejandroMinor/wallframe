@@ -65,3 +65,49 @@ def test_preview_follows_rotation(tmp_path):
     assert m.preview().size == (400, 200)
     m.edit("rotate")
     assert m.preview().size == (200, 400)
+
+
+def other_wallpaper(tmp_path, name="new.png"):
+    path = tmp_path / name
+    Image.new("RGB", (300, 300), (200, 100, 0)).save(path)
+    return str(path)
+
+
+def test_notices_a_wallpaper_set_elsewhere(tmp_path):
+    m = portrait_monitor(tmp_path)
+    assert not m.changed(m.shown)
+    assert m.changed(other_wallpaper(tmp_path))
+
+
+def test_own_apply_is_not_a_change(tmp_path):
+    m = portrait_monitor(tmp_path)
+    daemon = FakeDaemon()
+    m.edit("mirror")
+    m.apply(daemon)
+    assert not m.changed(daemon.shown["DP-1"])
+
+
+def test_load_switches_to_the_new_wallpaper(tmp_path):
+    m = portrait_monitor(tmp_path)
+    m.edit("rotate")
+    new = other_wallpaper(tmp_path)
+    m.load(Output("DP-1", 90, 160, new))
+    assert m.image == new
+    assert not m.touched
+    assert not m.changed(new)
+
+
+def test_ignored_change_is_not_asked_again(tmp_path):
+    m = portrait_monitor(tmp_path)
+    new = other_wallpaper(tmp_path)
+    m.ignored = new
+    assert not m.changed(new)
+    assert m.changed(other_wallpaper(tmp_path, "newer.png"))
+
+
+def test_discard_edit_goes_back_to_what_is_shown(tmp_path):
+    m = portrait_monitor(tmp_path)
+    m.edit("rotate")
+    m.framing.zoom_at(3, 0, 0)
+    m.discard_edit()
+    assert not m.touched
