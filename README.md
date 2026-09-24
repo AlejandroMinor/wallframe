@@ -75,6 +75,7 @@ for_window [app_id="io.github.AlejandroMinor.wallframe"] floating enable
 | Mirror / flip / rotate 90° | Toolbar | `H` / `V` / `R` |
 | Reset to the original image, centered | Toolbar | `0` |
 | Discard changes since the last Apply | Toolbar | `D` |
+| Copy position and fill from another monitor | Toolbar | |
 | Rule-of-thirds grid | Toolbar | `G` |
 | Next monitor | Monitor buttons | `Tab` |
 | Apply to the marked monitors | Apply | `Enter` |

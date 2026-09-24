@@ -129,3 +129,42 @@ def test_failed_apply_keeps_the_crop_the_monitor_shows(tmp_path):
     assert os.path.exists(shown)                            # still there for the next login
     assert daemon.shown["DP-1"] == shown
     assert m.touched                                        # the edit is still pending
+
+
+def monitor_on(tmp_path, name, width, height, image):
+    return Monitor(Output(name, width, height, str(image)), Store(tmp_path / "data"))
+
+
+def test_copy_everything_between_same_shape_monitors(tmp_path):
+    image = tmp_path / "wallpaper.png"
+    Image.new("RGB", (4000, 2000)).save(image)
+    small = monitor_on(tmp_path, "DP-1", 1080, 1920, image)
+    large = monitor_on(tmp_path, "DP-3", 1440, 2560, image)  # same 9:16 shape, bigger
+    small.edit("mirror")
+    small.framing.zoom_at(0.6, 300, 900)
+    small.framing.fill, small.framing.blur = "blur", 20
+    small.framing.backdrop.zoom_at(2, 500, 500)
+    assert large.copy_limits(small) is None
+    large.copy_from(small)
+    for a, b in ((small.framing, large.framing), (small.framing.backdrop, large.framing.backdrop)):
+        assert b.flip_h == a.flip_h
+        assert b.relative_zoom == pytest.approx(a.relative_zoom)
+        assert b.x / b.monitor_w == pytest.approx(a.x / a.monitor_w)   # same place, in proportion
+        assert b.y / b.monitor_h == pytest.approx(a.y / a.monitor_h)
+    assert large.framing.blur == 20
+
+
+def test_copy_only_the_fill_from_another_image_or_shape(tmp_path):
+    first, second = tmp_path / "a.png", tmp_path / "b.png"
+    Image.new("RGB", (4000, 2000)).save(first)
+    Image.new("RGB", (4000, 2000)).save(second)
+    source = monitor_on(tmp_path, "DP-1", 1080, 1920, first)
+    other_image = monitor_on(tmp_path, "DP-2", 1080, 1920, second)
+    other_shape = monitor_on(tmp_path, "DP-3", 2560, 1440, first)
+    source.framing.zoom_at(0.6, 0, 0)
+    source.framing.fill, source.framing.fill_color = "color", "#123456"
+    for target, reason in ((other_image, "different image"), (other_shape, "different screen shape")):
+        assert target.copy_limits(source) == reason
+        target.copy_from(source)
+        assert (target.framing.fill, target.framing.fill_color) == ("color", "#123456")
+        assert target.framing.relative_zoom == pytest.approx(1)    # position untouched

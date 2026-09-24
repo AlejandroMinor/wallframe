@@ -53,6 +53,32 @@ class Monitor:
         """Goes back to the framing the monitor showed before editing."""
         self.framing.restore(self.applied_framing)
 
+    def copy_limits(self, other):
+        """Why `other`'s position cannot be copied here, or None when it can.
+
+        The fill always copies. The position needs the same image, and a
+        monitor of the same shape: positions scale with the monitor size.
+        """
+        if other.image != self.image:
+            return "different image"
+        if self.width * other.height != other.width * self.height:
+            return "different screen shape"
+        return None
+
+    def copy_from(self, other):
+        """Takes `other`'s fill, and its position too when copy_limits allows it."""
+        if self.copy_limits(other):
+            self.framing.fill = other.framing.fill
+            self.framing.fill_color = other.framing.fill_color
+            self.framing.blur = other.framing.blur
+            return
+        saved = other.framing.to_dict()
+        scale = self.width / other.width  # same shape, so one factor fits both axes
+        saved["x"], saved["y"] = saved["x"] * scale, saved["y"] * scale
+        backdrop = saved["backdrop"]
+        backdrop["x"], backdrop["y"] = backdrop["x"] * scale, backdrop["y"] * scale
+        self.framing.restore(saved)
+
     def preview(self):
         """The thumbnail with the current mirror and rotation."""
         return render.transform(self.thumb, self.framing)

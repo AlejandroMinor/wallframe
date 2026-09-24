@@ -180,6 +180,13 @@ class Window(Gtk.ApplicationWindow):
         self.discard_button = icon_button("document-revert-symbolic",
                                           "Discard changes since the last Apply (D)", self.discard)
         tools.append(self.discard_button)
+        # Lists the other monitors each time it opens, since it depends on the current one.
+        self.copy_button = Gtk.MenuButton(icon_name="edit-copy-symbolic", focusable=False,
+                                          tooltip_text="Copy settings from another monitor",
+                                          popover=Gtk.Popover(),
+                                          visible=len(self.monitors) > 1)
+        self.copy_button.set_create_popup_func(self.fill_copy_menu)
+        tools.append(self.copy_button)
         self.grid_button = icon_button("view-grid-symbolic", "Rule-of-thirds grid (G)",
                                        self.on_grid_button, toggle=True)
         self.grid_button.set_active(self.show_grid)
@@ -462,6 +469,44 @@ class Window(Gtk.ApplicationWindow):
     def edit(self, action):
         self.monitor.edit(action)
         self.refresh()
+
+    def fill_copy_menu(self, menu_button):
+        """One entry per other monitor, saying what copying from it would take."""
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        heading = Gtk.Label(xalign=0, margin_start=6, margin_bottom=4)
+        heading.set_markup(f"<b>Copy to {GLib.markup_escape_text(self.monitor.name)} from</b>")
+        box.append(heading)
+        for source in self.monitors:
+            if source is self.monitor:
+                continue
+            limits = self.monitor.copy_limits(source)
+            what = "position and fill" if limits is None else f"fill only ({limits})"
+            name = Gtk.Label(xalign=0)
+            name.set_markup(f"<b>{GLib.markup_escape_text(source.name)}</b>")
+            detail = Gtk.Label(label=what, xalign=0)
+            detail.add_css_class("dim-label")
+            content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+            content.append(name)
+            content.append(detail)
+            button = Gtk.Button(child=content, focusable=False)
+            button.add_css_class("flat")
+            button.connect("clicked", lambda _b, source=source: self.copy_settings(source))
+            box.append(button)
+        menu_button.get_popover().set_child(box)
+
+    def copy_settings(self, source):
+        self.copy_button.popdown()
+        target = self.monitor
+        limits = target.copy_limits(source)
+        target.copy_from(source)
+        self.move_backdrop.set_active(False)
+        self.refresh()
+        if limits is None:
+            self.flash(f"Copied position and fill from {source.name}", "accent")
+        elif target.framing.covers:
+            self.flash(f"Copied the fill from {source.name}; it shows when zoomed out", "accent")
+        else:
+            self.flash(f"Copied the fill from {source.name} ({limits})", "accent")
 
     def discard(self):
         """Back to what the monitor shows now, dropping this session's changes on it."""
