@@ -1,9 +1,3 @@
-"""What the compositor knows about the monitors: which one has the focus and its model.
-
-Optional: Hyprland and sway are asked; on any other compositor wallframe
-still works, it just starts on the first monitor and shows no models.
-"""
-
 import json
 import os
 from dataclasses import dataclass, field
@@ -16,24 +10,21 @@ _QUERIES = {"HYPRLAND_INSTANCE_SIGNATURE": ["hyprctl", "monitors", "-j"],
 
 
 @dataclass
-class Monitors:
+class CompositorInfo:
     focused: str | None = None                   # output name, e.g. "DP-1"
     models: dict = field(default_factory=dict)   # output name -> "ASUS VA24E"
 
 
 def parse_outputs(outputs):
-    """Monitors from the decoded JSON list that hyprctl or swaymsg print."""
+    """Reads the JSON list printed by hyprctl or swaymsg."""
     focused = next((o.get("name") for o in outputs if o.get("focused")), None)
-    return Monitors(focused, {o.get("name"): display_model(o) for o in outputs})
+    return CompositorInfo(focused, {o.get("name"): display_model(o) for o in outputs})
 
 
 def display_model(output):
-    """Make and model, without repeating the make when the model already has it.
+    """Make and model, e.g. "AOC 24B3HM", without repeating the brand ("ASUS VA24E").
 
-    EDID makes are noisy ("ASUSTek COMPUTER INC", "NZXT (PNP same EDID)_") while
-    models usually start with the brand ("ASUS VA24E"), so only the make's
-    first word is kept, and only when neither already contains the other
-    (ASUSTek / ASUS).
+    EDID makes are noisy ("ASUSTek COMPUTER INC"), so only their first word is used.
     """
     make = (output.get("make") or "").split()
     model = (output.get("model") or "").strip()
@@ -46,11 +37,11 @@ def display_model(output):
 
 
 def detect():
-    """Asks the running compositor; empty Monitors on any other one."""
+    """Asks Hyprland or sway; empty on any other compositor."""
     for variable, cmd in _QUERIES.items():
         if os.environ.get(variable):
             try:
                 return parse_outputs(json.loads(run(cmd) or "[]"))
             except ValueError:
                 break
-    return Monitors()
+    return CompositorInfo()

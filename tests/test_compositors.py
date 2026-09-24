@@ -50,5 +50,5 @@ def test_other_compositors_run_nothing(monkeypatch):
     monkeypatch.setattr(compositors, "run", ran.append)
     monkeypatch.delenv("SWAYSOCK", raising=False)
     monkeypatch.delenv("HYPRLAND_INSTANCE_SIGNATURE", raising=False)
-    assert compositors.detect() == compositors.Monitors()
+    assert compositors.detect() == compositors.CompositorInfo()
     assert ran == []

@@ -14,7 +14,7 @@ def portrait():
     return Framing(1080, 1920, 3840, 2160)
 
 
-def test_starts_covering_the_monitor_centred():
+def test_starts_covering_the_monitor_centered():
     f = portrait()
     assert f.relative_zoom == 1
     left, top, right, bottom = f.crop_box()
@@ -25,7 +25,7 @@ def test_starts_covering_the_monitor_centred():
 
 def test_mirror_shows_the_same_region_mirrored():
     f = portrait()
-    f.move_to(-200, 0)                                      # off centre, so it shows
+    f.move_to(-200, 0)                                      # off center, so it shows
     left, top, right, bottom = f.crop_box()
     f.mirror(horizontal=True)
     assert f.flip_h
@@ -41,7 +41,7 @@ def test_mirror_twice_is_a_no_op():
     assert f.key() == before
 
 
-def test_rotation_swaps_the_image_size_and_recentres():
+def test_rotation_swaps_the_image_size_and_recenters():
     f = portrait()
     f.move_to(-500, 0)
     f.rotate()
@@ -79,7 +79,7 @@ def test_moving_never_uncovers_the_monitor():
 
 def test_zoom_keeps_the_point_under_the_pointer():
     f = portrait()
-    px, py = 540, 960                                       # monitor centre
+    px, py = 540, 960                                       # monitor center
     spot = ((px - f.x) / f.zoom, (py - f.y) / f.zoom)       # image pixel under it
     f.zoom_at(2, px, py)
     assert ((px - f.x) / f.zoom, (py - f.y) / f.zoom) == approx_box(spot)

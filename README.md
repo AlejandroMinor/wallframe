@@ -64,7 +64,7 @@ wallframe opens on the focused monitor. To start on a different monitor, give it
 
 ## Development
 
-The tests cover the framing math. They do not need a display or a wallpaper daemon:
+The tests cover everything except the window: framing, cropping, saved state and reading the daemon and compositor output. They do not need a display or a wallpaper daemon:
 
 ```bash
 python -m venv --system-site-packages .venv

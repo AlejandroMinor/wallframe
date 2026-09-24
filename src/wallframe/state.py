@@ -1,28 +1,22 @@
-"""Where wallframe keeps its crops, and what it remembers about each monitor.
-
-One folder holds one PNG crop per monitor plus state.json, which maps each
-monitor to its crop, the original image and the framing. With that, reopening
-wallframe starts again from the original image instead of cropping the crop.
-"""
-
 import json
 import os
 import re
 import time
 
-# Not ~/.cache: the crop is the wallpaper itself, and the daemon loads it from
-# this path again at every login, so a cache cleaner would leave the monitor blank.
+# Not ~/.cache: the daemon loads the crops from here at login.
 DATA_DIR = os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"),
                         "wallframe")
 
 
 class Store:
+    """The crops folder and state.json: monitor -> crop, original image and framing."""
+
     def __init__(self, directory=DATA_DIR):
         self.directory = directory
         self.state_file = os.path.join(directory, "state.json")
 
     def load(self):
-        """The whole state as {monitor: entry}; empty when missing or unreadable."""
+        """The saved state; empty when missing or unreadable."""
         try:
             with open(self.state_file) as f:
                 return json.load(f)
@@ -30,11 +24,9 @@ class Store:
             return {}
 
     def resume(self, monitor, shown):
-        """What to edit on a monitor that currently shows `shown`: (image, saved framing).
+        """Returns (image to edit, saved framing or None).
 
-        When `shown` is the crop wallframe made last time and the original still
-        exists, that original comes back with its saved framing. Otherwise the
-        monitor starts from what it shows, with no saved framing (None).
+        If the monitor shows wallframe's last crop, editing resumes from the original.
         """
         saved = self.load().get(monitor, {})
         if saved.get("crop") == shown and os.path.exists(saved.get("source", "")):
@@ -42,11 +34,9 @@ class Store:
         return shown, None
 
     def new_crop_path(self, monitor):
-        """A fresh path for the next crop of `monitor`, after deleting its old crops.
+        """Deletes the monitor's old crops and returns a new, unused path.
 
-        The daemon caches images by path, so reusing a name would bring back the
-        old crop. The timestamp in nanoseconds keeps two applies within the same
-        second apart.
+        The daemon caches images by path, so a reused name would show the old crop.
         """
         os.makedirs(self.directory, exist_ok=True)
         own = re.compile(re.escape(monitor) + r"-\d+\.png")
@@ -56,7 +46,7 @@ class Store:
         return os.path.join(self.directory, f"{monitor}-{time.time_ns()}.png")
 
     def remember(self, monitor, crop, source, framing):
-        """Records that `monitor` now shows `crop`, made from `source` with `framing`."""
+        """Saves that `monitor` shows `crop`, made from `source` with `framing`."""
         state = self.load()
         state[monitor] = {"crop": crop, "source": source, **framing.to_dict()}
         os.makedirs(self.directory, exist_ok=True)

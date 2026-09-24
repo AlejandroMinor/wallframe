@@ -1,9 +1,3 @@
-"""Wallpaper daemons: which image each output shows, and how to set a new one.
-
-awww is the continuation of swww and both answer the same commands, so one
-class covers both; only the program name changes.
-"""
-
 import re
 from dataclasses import dataclass
 
@@ -16,7 +10,7 @@ _QUERY_LINE = re.compile(r"^: ([^:]+): (\d+)x(\d+),.*image: (.+)$")
 
 @dataclass
 class Output:
-    """A monitor as the daemon sees it: its name, size in pixels and current image."""
+    """A monitor as the daemon sees it."""
     name: str
     width: int
     height: int
@@ -24,7 +18,7 @@ class Output:
 
 
 def parse_query(text):
-    """The outputs showing an image, from the text of `awww query` or `swww query`."""
+    """Reads the outputs showing an image from `awww query` or `swww query`."""
     outputs = []
     for line in text.splitlines():
         m = _QUERY_LINE.match(line)
@@ -34,20 +28,22 @@ def parse_query(text):
 
 
 class Daemon:
+    """awww or swww: both accept the same commands, since awww continues swww."""
+
     def __init__(self, program):
-        self.program = program  # "awww" or "swww"
+        self.program = program
 
     def outputs(self):
         return parse_query(run([self.program, "query"]))
 
     def set_image(self, output, path):
-        """Shows `path` on one output, as is: wallframe already cropped it to size."""
+        """Shows `path` on one output; --resize no because it is already cropped to size."""
         run([self.program, "img", "-o", output, "--resize", "no",
              "--transition-type", "fade", "--transition-duration", "0.4", path])
 
 
 def detect():
-    """The running daemon that shows at least one image, or None."""
+    """The running daemon, or None."""
     for program in ("awww", "swww"):
         daemon = Daemon(program)
         if daemon.outputs():
