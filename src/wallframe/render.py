@@ -7,6 +7,13 @@ _ROTATIONS = {90: Image.ROTATE_270, 180: Image.ROTATE_180, 270: Image.ROTATE_90}
 _BLUR_SHRINK = 8
 
 
+def _inside(box, image):
+    """Clamps a crop box to the image: float math can land a hair past an edge,
+    and Pillow refuses any box outside the image."""
+    left, top, right, bottom = box
+    return (max(0, left), max(0, top), min(image.width, right), min(image.height, bottom))
+
+
 def is_still_image(path):
     """False for videos and animations: one cropped frame would freeze them."""
     try:
@@ -51,7 +58,8 @@ def background(image, framing, size):
     shrink = max(1, min(_BLUR_SHRINK, framing.blur // 8))
     small = (max(1, size[0] // shrink), max(1, size[1] // shrink))
     scale = image.width / framing.image_w  # framing pixels -> pixels of this image
-    box = tuple(side * scale for side in framing.backdrop.crop_box())
+    # A thumbnail's height is rounded, so the scaled box can reach past its edge.
+    box = _inside([side * scale for side in framing.backdrop.crop_box()], image)
     backdrop = image.convert("RGB").resize(small, Image.LANCZOS, box=box)
     radius = framing.blur * small[0] / framing.monitor_w  # monitor pixels -> small copy pixels
     if radius:
@@ -65,10 +73,12 @@ def crop(source, framing, destination):
     with Image.open(source) as img:
         image = transform(img.convert("RGB"), framing)
         if framing.covers:
-            image.resize(size, Image.LANCZOS, box=framing.crop_box()).save(destination)
+            box = _inside(framing.crop_box(), image)
+            image.resize(size, Image.LANCZOS, box=box).save(destination)
             return
         source_box, (left, top, right, bottom) = framing.placement()
         canvas = background(image, framing, size)
-        canvas.paste(image.resize((right - left, bottom - top), Image.LANCZOS, box=source_box),
-                     (left, top))
+        box = _inside(source_box, image)
+        piece = image.resize((right - left, bottom - top), Image.LANCZOS, box=box)
+        canvas.paste(piece, (left, top))
         canvas.save(destination)

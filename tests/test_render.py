@@ -127,3 +127,11 @@ def test_sharp_backdrop_shows_the_part_it_frames(tmp_path):
     with Image.open(tmp_path / "left.png") as left, Image.open(tmp_path / "right.png") as right:
         assert left.getpixel((50, 10)) == RED
         assert right.getpixel((50, 10)) == GREEN
+
+
+def test_background_from_a_thumbnail_with_rounded_height(tmp_path):
+    # 4000x1993 shrinks to 2048x1020; scaled by the width, the bottom edge would be 1020.4.
+    f = Framing(2560, 1440, 4000, 1993)
+    f.zoom_at(0.5, 1280, 720)
+    thumb = Image.new("RGB", (2048, 1020), (10, 20, 30))
+    assert render.background(thumb, f, (1280, 720)).size == (1280, 720)
