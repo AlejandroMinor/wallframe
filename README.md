@@ -23,7 +23,7 @@ sudo pacman -S gtk4 python-gobject python-cairo python-pillow awww
 Optional:
 
 - Hyprland or sway: wallframe opens on the focused monitor and shows the model of each monitor.
-- `libnotify`: errors appear as notifications, which helps when you start wallframe without a terminal.
+- `libnotify`: errors appear as notifications, which helps when you start wallframe without a terminal. On Hyprland, errors appear as Hyprland notifications even without it.
 
 ## Install
 

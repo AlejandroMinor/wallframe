@@ -13,9 +13,6 @@ for that monitor only.
     python -m wallframe [MONITOR]
 """
 
-import json
-import re
-import subprocess
 import sys
 
 import cairo
@@ -25,7 +22,8 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
-from . import render  # noqa: E402
+from . import compositors, daemons, render  # noqa: E402
+from .commands import notify  # noqa: E402
 from .framing import MAX_ZOOM, Framing  # noqa: E402
 from .state import Store  # noqa: E402
 
@@ -33,68 +31,6 @@ APP_ID = "io.github.AlejandroMinor.wallframe"
 PREVIEW_MAX = 2048   # longest side of the on-screen copy; the crop uses the original
 MARGIN = 60          # canvas space around the frame, to see what is left out
 ZOOM_STEP = 1.1
-
-
-def run(cmd):
-    """Returns the command's stdout, or "" when it is missing or fails."""
-    try:
-        return subprocess.run(cmd, capture_output=True, text=True).stdout
-    except OSError:
-        return ""
-
-
-def notify(message):
-    """Reports a fatal problem on stderr and, when available, as a notification."""
-    print(f"wallframe: {message}", file=sys.stderr)
-    run(["notify-send", "wallframe", message])
-
-
-def daemon_outputs():
-    """Returns (daemon, [(name, width, height, image)]) for outputs showing an image.
-
-    awww is the continuation of swww and both answer `query` the same way, so
-    whichever daemon is running wins.
-    """
-    for daemon in ("awww", "swww"):
-        found = []
-        for line in run([daemon, "query"]).splitlines():
-            m = re.match(r"^: ([^:]+): (\d+)x(\d+),.*image: (.+)$", line)
-            if m:
-                found.append((m[1], int(m[2]), int(m[3]), m[4]))
-        if found:
-            return daemon, found
-    return None, []
-
-
-def compositor_outputs():
-    """Returns (focused name, {name: model}) from Hyprland or sway, else (None, {})."""
-    for cmd in (["hyprctl", "monitors", "-j"], ["swaymsg", "-t", "get_outputs"]):
-        try:
-            outputs = json.loads(run(cmd) or "[]")
-        except ValueError:
-            continue
-        if outputs:
-            focused = next((o.get("name") for o in outputs if o.get("focused")), None)
-            return focused, {o.get("name"): display_model(o) for o in outputs}
-    return None, {}
-
-
-def display_model(output):
-    """Make and model, without repeating the make when the model already has it.
-
-    EDID makes are noisy ("ASUSTek COMPUTER INC", "NZXT (PNP same EDID)_") while
-    models usually start with the brand ("ASUS VA24E"), so only the make's
-    first word is kept, and only when neither already contains the other
-    (ASUSTek / ASUS).
-    """
-    make = (output.get("make") or "").split()
-    model = (output.get("model") or "").strip()
-    if not make or not model:
-        return model or " ".join(make[:1])
-    brand, first = make[0].lower(), model.split()[0].lower()
-    if brand in model.lower() or first in brand:
-        return model
-    return f"{make[0]} {model}"
 
 
 def to_surface(img):
@@ -396,9 +332,7 @@ class Window(Gtk.ApplicationWindow):
         for t in self.targets:
             if not t.touched:
                 continue
-            subprocess.run([self.daemon, "img", "-o", t.name, "--resize", "no",
-                            "--transition-type", "fade", "--transition-duration", "0.4",
-                            t.render()])
+            self.daemon.set_image(t.name, t.render())
             t.applied = t.framing.key()
         self.refresh()
         self.flash("Applied")
@@ -410,21 +344,22 @@ class Window(Gtk.ApplicationWindow):
 
 
 def main():
-    daemon, outputs = daemon_outputs()
-    if not outputs:
+    daemon = daemons.detect()
+    if not daemon:
         notify("No image wallpaper found.")
         return 1
 
     store = Store()
-    targets = [Target(name, width, height, image, store)
-               for name, width, height, image in outputs if render.is_still_image(image)]
+    targets = [Target(o.name, o.width, o.height, o.image, store)
+               for o in daemon.outputs() if render.is_still_image(o.image)]
     if not targets:
         notify("Animated and video wallpapers cannot be adjusted.")
         return 1
 
-    focused, models = compositor_outputs()
+    monitors = compositors.detect()
+    focused = monitors.focused
     for t in targets:
-        t.model = models.get(t.name, "")
+        t.model = monitors.models.get(t.name, "")
     wanted = sys.argv[1] if len(sys.argv) > 1 else focused
     start = next((i for i, t in enumerate(targets) if t.name == wanted), 0)
 
