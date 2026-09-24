@@ -12,14 +12,30 @@ from .framing import MAX_ZOOM  # noqa: E402
 APP_ID = "io.github.AlejandroMinor.wallframe"
 MARGIN = 60  # canvas space around the frame, to see what is left out
 ZOOM_STEP = 1.1
+FLASH_MS = 3000  # how long status bar messages stay
 KEY_ACTIONS = {"h": "mirror", "v": "flip", "r": "rotate", "0": "reset", "KP_0": "reset"}
+# GTK's own theme leaves these classes uncolored on labels; the named colors
+# still come from the user's theme.
+STYLE = """
+label.success { color: @success_color; }
+label.warning { color: @warning_color; }
+label.error { color: @error_color; }
+"""
 
 
 def run(monitors, daemon, start, focused):
     """Opens the editor on monitors[start] and returns the exit status."""
     app = Gtk.Application(application_id=APP_ID)
+    app.connect("startup", lambda _app: add_style())
     app.connect("activate", lambda _app: Window(app, monitors, daemon, start, focused).present())
     return app.run([])
+
+
+def add_style():
+    provider = Gtk.CssProvider()
+    provider.load_from_string(STYLE)
+    Gtk.StyleContext.add_provider_for_display(
+        Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
 
 def to_surface(img):
@@ -306,12 +322,12 @@ class Window(Gtk.ApplicationWindow):
     def apply_touched(self):
         touched = [m for m in self.monitors if m.touched]
         if not touched:
-            self.flash("Nothing to apply")
+            self.flash("Nothing to apply", "warning")
             return
         for monitor in touched:
             monitor.apply(self.daemon)
         self.refresh()
-        self.flash("Applied")
+        self.flash("Applied", "success")
 
     def sync_with_daemon(self, then=None, ask_postponed=True):
         """Reloads monitors whose wallpaper changed elsewhere; asks about edited ones.
@@ -332,7 +348,7 @@ class Window(Gtk.ApplicationWindow):
                 reloaded.append(monitor.name)
         self.refresh()
         if reloaded:
-            self.flash(f"New wallpaper loaded on {', '.join(reloaded)}")
+            self.flash(f"New wallpaper loaded on {', '.join(reloaded)}", "success")
         self.ask_next(conflicts, then)
 
     def ask_next(self, conflicts, then):
@@ -373,14 +389,20 @@ class Window(Gtk.ApplicationWindow):
 
         dialog.choose(self, None, answered)
 
-    def flash(self, text):
-        """Shows a short message in the status bar, then restores it."""
+    def flash(self, text, style):
+        """Shows a short message in the status bar, then restores it.
+
+        `style` is a GTK style class ("success", "warning" or "error"), so the
+        color comes from the user's theme.
+        """
+        self.label.set_css_classes([style])
         self.label.set_markup(f"<b>{GLib.markup_escape_text(text)}</b>")
         if self.flash_timer:
             GLib.source_remove(self.flash_timer)  # a newer message gets its full time
-        self.flash_timer = GLib.timeout_add(1500, self.restore_status)
+        self.flash_timer = GLib.timeout_add(FLASH_MS, self.restore_status)
 
     def restore_status(self):
         self.flash_timer = None
+        self.label.set_css_classes([])
         self.refresh()
-        return False  # run once; True would repeat every 1500 ms
+        return False  # run once; True would repeat the timer
