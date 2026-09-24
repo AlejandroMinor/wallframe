@@ -68,14 +68,18 @@ for_window [app_id="io.github.AlejandroMinor.wallframe"] floating enable
 
 | Action | Mouse / button | Key |
 |--------|----------------|-----|
-| Move | Drag | |
-| Zoom | Scroll or slider | |
+| Move | Drag | Arrows (`Shift` for bigger steps) |
+| Zoom | Scroll, slider or `−` / `+` buttons | `+` / `-` |
+| Center, keeping the zoom | | `C` |
+| Move the background instead of the image | Fill panel | `B` |
 | Mirror / flip / rotate 90° | Toolbar | `H` / `V` / `R` |
 | Reset to the original image, centered | Toolbar | `0` |
 | Rule-of-thirds grid | Toolbar | `G` |
 | Next monitor | Monitor buttons | `Tab` |
 | Apply to the marked monitors | Apply | `Enter` |
 | Close | | `Esc` |
+
+Zoom below 100% to see more of the image, or to make it smaller than the monitor. The empty space around it is filled with a copy of the image, blurred as much as you like, or with a color. Both are in the **Fill** panel of the bottom bar. Check **Move background** there (or press `B`) to drag and zoom that copy instead of the image.
 
 A dot on a monitor button means that the monitor does not show your changes yet. Apply crops the image to the exact size of the monitor and sets it with awww (or swww) on that monitor only. The window stays open.
 

@@ -7,16 +7,22 @@ gi.require_version("Pango", "1.0")
 from gi.repository import Gdk, GLib, Gtk, Pango  # noqa: E402
 
 from . import render  # noqa: E402
-from .framing import MAX_ZOOM  # noqa: E402
+from .framing import BLUR_RANGE, FILLS, MAX_ZOOM  # noqa: E402
 
 APP_ID = "io.github.AlejandroMinor.wallframe"
 MARGIN = 60  # canvas space around the frame, to see what is left out
 ZOOM_STEP = 1.1
 FLASH_MS = 3000  # how long status bar messages stay
 KEY_ACTIONS = {"h": "mirror", "v": "flip", "r": "rotate", "0": "reset", "KP_0": "reset"}
+ZOOM_KEYS = {"plus": ZOOM_STEP, "equal": ZOOM_STEP, "KP_Add": ZOOM_STEP,
+             "minus": 1 / ZOOM_STEP, "KP_Subtract": 1 / ZOOM_STEP}
+ARROW_KEYS = {"Left": (-1, 0), "Right": (1, 0), "Up": (0, -1), "Down": (0, 1)}
+NUDGE = 5            # monitor pixels per arrow key press
+NUDGE_SHIFT = 50     # with Shift held
 # GTK's own theme leaves these classes uncolored on labels; the named colors
 # still come from the user's theme.
 STYLE = """
+label.accent { color: @accent_color; }
 label.success { color: @success_color; }
 label.warning { color: @warning_color; }
 label.error { color: @error_color; }
@@ -65,6 +71,7 @@ class Window(Gtk.ApplicationWindow):
         super().__init__(application=app, title="wallframe")
         self.monitors, self.daemon, self.index = monitors, daemon, start
         self.previews = {}    # monitor name -> (image, mirror and rotation, cairo surface)
+        self.backgrounds = {}  # monitor name -> (image, transform and fill, cairo surface)
         self.show_grid = True
         self.syncing = False  # set while code moves the zoom slider
         self.asking = False   # set while wallpaper-change questions are on screen
@@ -137,8 +144,13 @@ class Window(Gtk.ApplicationWindow):
         return top
 
     def build_bottom_bar(self):
-        """What is being edited on the left, zoom on the right."""
+        """What is being edited on the left, fill and zoom on the right."""
         self.label = Gtk.Label(xalign=0, hexpand=True, ellipsize=Pango.EllipsizeMode.END)
+
+        # Only shown below 100%, when the image leaves gaps to fill.
+        self.fill_button = Gtk.MenuButton(popover=self.build_fill_popover(), focusable=False,
+                                          tooltip_text="What fills the space around the image")
+
         self.zoom_scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL,
                                                    100, MAX_ZOOM * 100, 5)
         self.zoom_scale.set_draw_value(False)
@@ -148,10 +160,53 @@ class Window(Gtk.ApplicationWindow):
         self.zoom_label = Gtk.Label(width_chars=5, xalign=1)
         bottom = Gtk.Box(spacing=8, margin_top=6, margin_bottom=6, margin_start=12, margin_end=12)
         bottom.append(self.label)
-        bottom.append(Gtk.Image(icon_name="zoom-in-symbolic", tooltip_text="Zoom (scroll)"))
+        bottom.append(self.fill_button)
+        zoom_out = icon_button("zoom-out-symbolic", "Zoom out (-)",
+                               lambda: self.zoom_centered(1 / ZOOM_STEP))
+        zoom_in = icon_button("zoom-in-symbolic", "Zoom in (+)",
+                              lambda: self.zoom_centered(ZOOM_STEP))
+        for button in (zoom_out, zoom_in):
+            button.add_css_class("flat")
+        bottom.append(zoom_out)
         bottom.append(self.zoom_scale)
+        bottom.append(zoom_in)
         bottom.append(self.zoom_label)
         return bottom
+
+    def build_fill_popover(self):
+        """Fill kind, blur strength, background moving and color, in one panel."""
+        self.fill_choice = Gtk.DropDown.new_from_strings(["Blur", "Color"])
+        self.fill_choice.set_tooltip_text("What fills the space around the image")
+        self.fill_choice.set_focusable(False)
+        self.fill_choice.connect("notify::selected", self.on_fill_choice)
+        # Not modal: compositors like Hyprland dim the parent of a modal dialog,
+        # and the eyedropper would then pick the dimmed colors.
+        self.fill_color = Gtk.ColorDialogButton(
+            dialog=Gtk.ColorDialog(with_alpha=False, modal=False), focusable=False)
+        self.fill_color.connect("notify::rgba", self.on_fill_color)
+        self.blur_scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, *BLUR_RANGE, 8)
+        self.blur_scale.set_draw_value(False)
+        self.blur_scale.set_size_request(180, -1)
+        self.blur_scale.set_focusable(False)
+        self.blur_scale.set_tooltip_text("Blur strength")
+        self.blur_scale.connect("value-changed", self.on_blur_scale)
+        # Checked, dragging and zooming move the blurred background instead of the image.
+        self.move_backdrop = Gtk.CheckButton(label="Move background (B)", focusable=False)
+        self.move_backdrop.connect("toggled", self.on_move_backdrop)
+
+        grid = Gtk.Grid(row_spacing=10, column_spacing=12, margin_top=10, margin_bottom=10,
+                        margin_start=10, margin_end=10)
+        self.blur_label = Gtk.Label(label="Strength", xalign=0)
+        self.color_label = Gtk.Label(label="Color", xalign=0)
+        for row, (label, control) in enumerate((
+                (Gtk.Label(label="Fill", xalign=0), self.fill_choice),
+                (self.blur_label, self.blur_scale),
+                (self.color_label, self.fill_color))):
+            grid.attach(label, 0, row, 1, 1)
+            grid.attach(control, 1, row, 1, 1)
+        grid.attach(self.move_backdrop, 0, 3, 2, 1)
+        # Stays open while dragging on the canvas; the Fill button or Esc closes it.
+        return Gtk.Popover(child=grid, autohide=False)
 
     def connect_input(self):
         drag = Gtk.GestureDrag()
@@ -177,6 +232,19 @@ class Window(Gtk.ApplicationWindow):
     def monitor(self):
         return self.monitors[self.index]
 
+    @property
+    def backdrop_visible(self):
+        """True when the blurred background shows, so there is something to move."""
+        framing = self.monitor.framing
+        return framing.fill == "blur" and not framing.covers
+
+    @property
+    def moving(self):
+        """What dragging and zooming act on: the image, or the blurred background behind it."""
+        if self.move_backdrop.get_active() and self.backdrop_visible:
+            return self.monitor.framing.backdrop
+        return self.monitor.framing
+
     def preview(self, monitor):
         """The monitor's preview surface, rebuilt when the image, mirror or rotation change."""
         framing = monitor.framing
@@ -184,6 +252,18 @@ class Window(Gtk.ApplicationWindow):
         cached = self.previews.get(monitor.name)
         if not cached or cached[0] != key:
             cached = self.previews[monitor.name] = (key, to_surface(monitor.preview()))
+        return cached[1]
+
+    def background(self, monitor):
+        """The fill behind a smaller image, at half the monitor size; rebuilt when it changes."""
+        framing = monitor.framing
+        key = (monitor.image, framing.flip_h, framing.flip_v, framing.rotation,
+               framing.fill, framing.fill_color, framing.blur, framing.backdrop.key())
+        cached = self.backgrounds.get(monitor.name)
+        if not cached or cached[0] != key:
+            size = (max(1, monitor.width // 2), max(1, monitor.height // 2))
+            surface = to_surface(render.background(monitor.preview(), framing, size))
+            cached = self.backgrounds[monitor.name] = (key, surface)
         return cached[1]
 
     def frame(self):
@@ -200,6 +280,17 @@ class Window(Gtk.ApplicationWindow):
         cr.set_source_rgb(0.08, 0.08, 0.08)
         cr.paint()
 
+        if not framing.covers:
+            # The fill, inside the frame only, behind the image.
+            background = self.background(monitor)
+            cr.save()
+            cr.translate(fx, fy)
+            fill_scale = scale * monitor.width / background.get_width()
+            cr.scale(fill_scale, fill_scale)
+            cr.set_source_surface(background, 0, 0)
+            cr.paint()
+            cr.restore()
+
         # The whole image, at its current position relative to the frame.
         preview = self.preview(monitor)
         cr.save()
@@ -207,8 +298,21 @@ class Window(Gtk.ApplicationWindow):
         image_scale = framing.zoom * scale * framing.image_w / preview.get_width()
         cr.scale(image_scale, image_scale)
         cr.set_source_surface(preview, 0, 0)
-        cr.paint()
+        # While the background moves, the image fades so the background shows through,
+        # and a dashed outline keeps its place visible.
+        moving_backdrop = self.moving is not framing
+        cr.paint_with_alpha(0.35 if moving_backdrop else 1)
         cr.restore()
+        if moving_backdrop:
+            cr.save()
+            cr.set_source_rgba(1, 1, 1, 0.9)
+            cr.set_line_width(1.5)
+            cr.set_dash([6, 4])
+            cr.rectangle(fx + framing.x * scale, fy + framing.y * scale,
+                         framing.image_w * framing.zoom * scale,
+                         framing.image_h * framing.zoom * scale)
+            cr.stroke()
+            cr.restore()
 
         # Dim everything outside the frame: that part will not be shown.
         fw, fh = monitor.width * scale, monitor.height * scale
@@ -236,6 +340,7 @@ class Window(Gtk.ApplicationWindow):
     def select(self, index):
         self.index = index
         self.buttons[index].set_active(True)
+        self.move_backdrop.set_active(False)  # each monitor starts by moving its image
         self.refresh()
 
     def on_pick(self, button, index):
@@ -248,17 +353,36 @@ class Window(Gtk.ApplicationWindow):
             button.name_label.set_label(f"● {monitor.name}" if monitor.touched else monitor.name)
         monitor = self.monitor
         framing = monitor.framing
-        pct = round(framing.relative_zoom * 100)
+        moving = self.moving
+        pct = round(moving.relative_zoom * 100)
         self.syncing = True
+        # The lowest zoom depends on the monitor, the rotation and what is being moved.
+        self.zoom_scale.set_range(moving.lowest_zoom / moving.min_zoom * 100, MAX_ZOOM * 100)
         self.zoom_scale.set_value(pct)
+        self.fill_choice.set_selected(FILLS.index(framing.fill))
+        rgba = Gdk.RGBA()
+        rgba.parse(framing.fill_color)
+        self.fill_color.set_rgba(rgba)
+        self.blur_scale.set_value(framing.blur)
         self.syncing = False
+        blur = framing.fill == "blur"
+        if self.move_backdrop.get_active() and not self.backdrop_visible:
+            self.move_backdrop.set_active(False)  # nothing left to move: back to the image
+        self.fill_button.set_visible(not framing.covers)
+        self.fill_button.set_label(f"Fill: {'Blur' if blur else 'Color'}")
+        for widget in (self.blur_label, self.blur_scale, self.move_backdrop):
+            widget.set_visible(blur)
+        for widget in (self.color_label, self.fill_color):
+            widget.set_visible(not blur)
         self.zoom_label.set_label(f"{pct}%")
         details = describe(monitor) + [
+            "moving the background" if self.moving is not framing else "",
             "mirrored" if framing.flip_h else "",
             "flipped" if framing.flip_v else "",
             f"rotated {framing.rotation}°" if framing.rotation else ""]
-        self.label.set_markup(f"<b>{GLib.markup_escape_text(monitor.name)}</b>   "
-                              + GLib.markup_escape_text("  ·  ".join(filter(None, details))))
+        if not self.flash_timer:  # a message on screen keeps the bar until it ends
+            self.label.set_markup(f"<b>{GLib.markup_escape_text(monitor.name)}</b>   "
+                                  + GLib.markup_escape_text("  ·  ".join(filter(None, details))))
         self.area.queue_draw()
 
     def edit(self, action):
@@ -270,33 +394,70 @@ class Window(Gtk.ApplicationWindow):
         self.area.queue_draw()
 
     def on_zoom_scale(self, scale):
-        if self.syncing:
-            return
+        if not self.syncing:
+            self.zoom_centered(scale.get_value() / 100 / self.moving.relative_zoom)
+
+    def zoom_centered(self, factor):
+        """Zooms around the frame's center, for the slider and buttons that have no pointer."""
         monitor = self.monitor
-        # Zoom around the frame's center, as there is no pointer to anchor to.
-        monitor.framing.zoom_at(scale.get_value() / 100 / monitor.framing.relative_zoom,
-                          monitor.width / 2, monitor.height / 2)
+        self.moving.zoom_at(factor, monitor.width / 2, monitor.height / 2)
         self.refresh()
 
+    def on_fill_choice(self, dropdown, _prop):
+        if not self.syncing:
+            self.monitor.framing.fill = FILLS[dropdown.get_selected()]
+            self.refresh()
+
+    def on_fill_color(self, button, _prop):
+        if not self.syncing:
+            rgba = button.get_rgba()
+            self.monitor.framing.fill_color = "#{:02x}{:02x}{:02x}".format(
+                *(round(channel * 255) for channel in (rgba.red, rgba.green, rgba.blue)))
+            self.refresh()
+
+    def toggle_backdrop(self):
+        """The B key: switches between moving the image and its background, when there is one."""
+        if self.move_backdrop.get_active() or self.backdrop_visible:
+            self.move_backdrop.set_active(not self.move_backdrop.get_active())
+        elif self.monitor.framing.covers:
+            self.flash("Zoom out below 100% to move the background", "warning")
+        else:
+            self.flash("Only the Blur fill has a background to move", "warning")
+
+    def on_move_backdrop(self, button):
+        self.refresh()
+        if button.get_active():
+            self.flash("Moving the background · press B to move the image", "accent")
+        else:
+            self.flash("Moving the image", "accent")
+
+    def on_blur_scale(self, scale):
+        if not self.syncing:
+            self.monitor.framing.blur = round(scale.get_value())
+            self.refresh()
+
     def on_drag_begin(self, _gesture, _x, _y):
-        self.drag_origin = (self.monitor.framing.x, self.monitor.framing.y)
+        self.drag_origin = (self.moving.x, self.moving.y)
+        if self.moving is not self.monitor.framing and not self.moving.can_move:
+            self.flash("Zoom in the background to move it", "warning")
 
     def on_drag_update(self, _gesture, dx, dy):
         scale, _, _ = self.frame()
-        self.monitor.framing.move_to(self.drag_origin[0] + dx / scale,
-                                     self.drag_origin[1] + dy / scale)
+        self.moving.move_to(self.drag_origin[0] + dx / scale, self.drag_origin[1] + dy / scale)
         self.refresh()
 
     def on_scroll(self, _controller, _dx, dy):
         scale, fx, fy = self.frame()
         px, py = (self.pointer[0] - fx) / scale, (self.pointer[1] - fy) / scale
-        self.monitor.framing.zoom_at(ZOOM_STEP ** -dy, px, py)
+        self.moving.zoom_at(ZOOM_STEP ** -dy, px, py)
         self.refresh()
         return True
 
-    def on_key(self, _controller, keyval, _code, _state):
+    def on_key(self, _controller, keyval, _code, state):
         key = Gdk.keyval_name(Gdk.keyval_to_lower(keyval))
-        if key == "Escape":
+        if key == "Escape" and self.fill_button.get_active():
+            self.fill_button.popdown()  # Esc closes the panel, not the whole window
+        elif key == "Escape":
             self.close()
         elif key == "Tab" and len(self.monitors) > 1:
             self.select((self.index + 1) % len(self.monitors))
@@ -306,6 +467,18 @@ class Window(Gtk.ApplicationWindow):
             self.edit(KEY_ACTIONS[key])
         elif key == "g":
             self.grid_button.set_active(not self.grid_button.get_active())
+        elif key == "b":
+            self.toggle_backdrop()
+        elif key == "c":
+            self.moving.center()
+            self.refresh()
+        elif key in ZOOM_KEYS:
+            self.zoom_centered(ZOOM_KEYS[key])
+        elif key in ARROW_KEYS:
+            step = NUDGE_SHIFT if state & Gdk.ModifierType.SHIFT_MASK else NUDGE
+            dx, dy = ARROW_KEYS[key]
+            self.moving.move_to(self.moving.x + dx * step, self.moving.y + dy * step)
+            self.refresh()
         else:
             return False
         return True
@@ -326,6 +499,7 @@ class Window(Gtk.ApplicationWindow):
             return
         for monitor in touched:
             monitor.apply(self.daemon)
+        self.move_backdrop.set_active(False)  # back to moving the image
         self.refresh()
         self.flash("Applied", "success")
 
@@ -392,8 +566,8 @@ class Window(Gtk.ApplicationWindow):
     def flash(self, text, style):
         """Shows a short message in the status bar, then restores it.
 
-        `style` is a GTK style class ("success", "warning" or "error"), so the
-        color comes from the user's theme.
+        `style` is a GTK style class ("accent", "success", "warning" or "error"),
+        so the color comes from the user's theme.
         """
         self.label.set_css_classes([style])
         self.label.set_markup(f"<b>{GLib.markup_escape_text(text)}</b>")
