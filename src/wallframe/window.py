@@ -17,6 +17,31 @@ KEY_ACTIONS = {"h": "mirror", "v": "flip", "r": "rotate", "0": "reset", "KP_0": 
 ZOOM_KEYS = {"plus": ZOOM_STEP, "equal": ZOOM_STEP, "KP_Add": ZOOM_STEP,
              "minus": 1 / ZOOM_STEP, "KP_Subtract": 1 / ZOOM_STEP}
 ARROW_KEYS = {"Left": (-1, 0), "Right": (1, 0), "Up": (0, -1), "Down": (0, 1)}
+HELP_KEYS = ("question", "F1")
+# What the help panel lists: (section, [(keys, action)]).
+SHORTCUTS = [
+    ("Move and zoom", [
+        ("Drag  ·  Arrows", "Move (Shift: bigger steps)"),
+        ("Scroll  ·  +  −", "Zoom"),
+        ("C", "Center, keeping the zoom"),
+    ]),
+    ("Image", [
+        ("H", "Mirror"),
+        ("V", "Flip upside down"),
+        ("R", "Rotate 90°"),
+        ("0", "Reset to the original image, centered"),
+    ]),
+    ("Background (zoomed out, Blur fill)", [
+        ("B", "Move the background instead of the image"),
+    ]),
+    ("Window", [
+        ("Tab", "Next monitor"),
+        ("G", "Rule-of-thirds grid"),
+        ("Enter", "Apply to the marked monitors"),
+        ("?  ·  F1", "Show these shortcuts"),
+        ("Esc", "Close a panel, or the window"),
+    ]),
+]
 NUDGE = 5            # monitor pixels per arrow key press
 NUDGE_SHIFT = 50     # with Shift held
 # GTK's own theme leaves these classes uncolored on labels; the named colors
@@ -58,6 +83,28 @@ def icon_button(icon, tooltip, callback, toggle=False):
         icon_name=icon, tooltip_text=tooltip, focusable=False)
     button.connect("toggled" if toggle else "clicked", lambda _b: callback())
     return button
+
+
+def pinned_popover(title, content):
+    """A popover that stays open while you work, with a title and a close button.
+
+    It does not close on clicks elsewhere, so you can keep dragging on the
+    canvas with it open; its close button, its menu button or Esc close it.
+    """
+    popover = Gtk.Popover(autohide=False)
+    heading = Gtk.Label(xalign=0, hexpand=True)
+    heading.set_markup(f"<b>{GLib.markup_escape_text(title)}</b>")
+    close = icon_button("window-close-symbolic", "Close (Esc)", popover.popdown)
+    close.add_css_class("flat")
+    header = Gtk.Box(spacing=6)
+    header.append(heading)
+    header.append(close)
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin_top=6,
+                  margin_bottom=12, margin_start=12, margin_end=6)
+    box.append(header)
+    box.append(content)
+    popover.set_child(box)
+    return popover
 
 
 def describe(monitor):
@@ -158,7 +205,12 @@ class Window(Gtk.ApplicationWindow):
         self.zoom_scale.set_focusable(False)
         self.zoom_scale.connect("value-changed", self.on_zoom_scale)
         self.zoom_label = Gtk.Label(width_chars=5, xalign=1)
-        bottom = Gtk.Box(spacing=8, margin_top=6, margin_bottom=6, margin_start=12, margin_end=12)
+        self.help_button = Gtk.MenuButton(icon_name="input-keyboard-symbolic", focusable=False,
+                                          tooltip_text="Keyboard shortcuts (?)",
+                                          popover=self.build_help_popover())
+        self.help_button.add_css_class("flat")
+        bottom = Gtk.Box(spacing=8, margin_top=6, margin_bottom=6, margin_start=6, margin_end=12)
+        bottom.append(self.help_button)
         bottom.append(self.label)
         bottom.append(self.fill_button)
         zoom_out = icon_button("zoom-out-symbolic", "Zoom out (-)",
@@ -172,6 +224,23 @@ class Window(Gtk.ApplicationWindow):
         bottom.append(zoom_in)
         bottom.append(self.zoom_label)
         return bottom
+
+    def build_help_popover(self):
+        """Every mouse action and key, grouped, from SHORTCUTS."""
+        grid = Gtk.Grid(row_spacing=6, column_spacing=18)
+        row = 0
+        for section, entries in SHORTCUTS:
+            title = Gtk.Label(xalign=0, margin_top=0 if row == 0 else 8)
+            title.set_markup(f"<b>{GLib.markup_escape_text(section)}</b>")
+            grid.attach(title, 0, row, 2, 1)
+            row += 1
+            for keys, action in entries:
+                key_label = Gtk.Label(label=keys, xalign=1)
+                key_label.add_css_class("monospace")
+                grid.attach(key_label, 0, row, 1, 1)
+                grid.attach(Gtk.Label(label=action, xalign=0), 1, row, 1, 1)
+                row += 1
+        return pinned_popover("Keyboard shortcuts", grid)
 
     def build_fill_popover(self):
         """Fill kind, blur strength, background moving and color, in one panel."""
@@ -194,8 +263,7 @@ class Window(Gtk.ApplicationWindow):
         self.move_backdrop = Gtk.CheckButton(label="Move background (B)", focusable=False)
         self.move_backdrop.connect("toggled", self.on_move_backdrop)
 
-        grid = Gtk.Grid(row_spacing=10, column_spacing=12, margin_top=10, margin_bottom=10,
-                        margin_start=10, margin_end=10)
+        grid = Gtk.Grid(row_spacing=10, column_spacing=12)
         self.blur_label = Gtk.Label(label="Strength", xalign=0)
         self.color_label = Gtk.Label(label="Color", xalign=0)
         for row, (label, control) in enumerate((
@@ -205,8 +273,7 @@ class Window(Gtk.ApplicationWindow):
             grid.attach(label, 0, row, 1, 1)
             grid.attach(control, 1, row, 1, 1)
         grid.attach(self.move_backdrop, 0, 3, 2, 1)
-        # Stays open while dragging on the canvas; the Fill button or Esc closes it.
-        return Gtk.Popover(child=grid, autohide=False)
+        return pinned_popover("Around the image", grid)
 
     def connect_input(self):
         drag = Gtk.GestureDrag()
@@ -455,8 +522,12 @@ class Window(Gtk.ApplicationWindow):
 
     def on_key(self, _controller, keyval, _code, state):
         key = Gdk.keyval_name(Gdk.keyval_to_lower(keyval))
-        if key == "Escape" and self.fill_button.get_active():
-            self.fill_button.popdown()  # Esc closes the panel, not the whole window
+        open_panel = next((b for b in (self.fill_button, self.help_button) if b.get_active()),
+                          None)
+        if key == "Escape" and open_panel:
+            open_panel.popdown()  # Esc closes the panel, not the whole window
+        elif key in HELP_KEYS:
+            self.help_button.set_active(not self.help_button.get_active())
         elif key == "Escape":
             self.close()
         elif key == "Tab" and len(self.monitors) > 1:

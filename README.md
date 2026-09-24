@@ -77,6 +77,7 @@ for_window [app_id="io.github.AlejandroMinor.wallframe"] floating enable
 | Rule-of-thirds grid | Toolbar | `G` |
 | Next monitor | Monitor buttons | `Tab` |
 | Apply to the marked monitors | Apply | `Enter` |
+| Show all keyboard shortcuts | Keyboard button, bottom left | `?` / `F1` |
 | Close | | `Esc` |
 
 Zoom below 100% to see more of the image, or to make it smaller than the monitor. The empty space around it is filled with a copy of the image, blurred as much as you like, or with a color. Both are in the **Fill** panel of the bottom bar. Check **Move background** there (or press `B`) to drag and zoom that copy instead of the image.
