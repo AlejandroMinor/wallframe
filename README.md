@@ -41,6 +41,27 @@ To run it from anywhere as `wallframe`, link it into a folder in your `PATH`:
 ln -s "$PWD/wallframe" ~/.local/bin/wallframe
 ```
 
+### Open as a floating window
+
+wallframe works best as a floating window, centered on the screen. Add a rule for its app ID, `io.github.AlejandroMinor.wallframe`.
+
+Hyprland:
+
+```lua
+hl.window_rule({
+    name   = "wallframe",
+    match  = { class = "^(io.github.AlejandroMinor.wallframe)$" },
+    float  = true,
+    center = true,
+})
+```
+
+sway:
+
+```
+for_window [app_id="io.github.AlejandroMinor.wallframe"] floating enable
+```
+
 ## Usage
 
 ![wallframe editing a portrait monitor: the frame is bright, the rest of the image is dimmed](docs/interface.webp)
