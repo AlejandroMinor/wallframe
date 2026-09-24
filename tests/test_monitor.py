@@ -1,5 +1,8 @@
 """Tests for one monitor's edit and apply cycle, with a fake daemon."""
 
+import os
+
+import pytest
 from PIL import Image
 
 from wallframe.daemons import Output
@@ -111,3 +114,18 @@ def test_discard_edit_goes_back_to_what_is_shown(tmp_path):
     m.framing.zoom_at(3, 0, 0)
     m.discard_edit()
     assert not m.touched
+
+
+def test_failed_apply_keeps_the_crop_the_monitor_shows(tmp_path):
+    m = portrait_monitor(tmp_path)
+    daemon = FakeDaemon()
+    m.edit("mirror")
+    m.apply(daemon)
+    shown = daemon.shown["DP-1"]
+    m.edit("rotate")
+    os.remove(m.image)                                      # the original disappears
+    with pytest.raises(FileNotFoundError):
+        m.apply(daemon)
+    assert os.path.exists(shown)                            # still there for the next login
+    assert daemon.shown["DP-1"] == shown
+    assert m.touched                                        # the edit is still pending

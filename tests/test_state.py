@@ -1,5 +1,7 @@
 """Tests for the saved state: always in a temporary folder, never in ~/.local/share."""
 
+import os
+
 from wallframe.framing import Framing
 from wallframe.state import Store
 
@@ -48,13 +50,16 @@ def test_no_resume_when_the_original_is_gone(tmp_path):
     assert store.resume("DP-1", crop) == (crop, None)
 
 
-def test_new_crop_deletes_only_that_monitors_old_crops(tmp_path):
+def test_old_crops_go_only_after_the_new_one_and_only_that_monitors(tmp_path):
     store = Store(tmp_path)
     for name in ("DP-1-100.png", "DP-1-200.png", "DP-10-100.png", "HDMI-A-1-100.png", "notes.txt"):
         (tmp_path / name).write_bytes(b"")
     path = store.new_crop_path("DP-1")
+    assert len(list(tmp_path.iterdir())) == 5                # nothing deleted yet
+    open(path, "wb").close()
+    store.remove_old_crops("DP-1", keep=path)
     left = sorted(p.name for p in tmp_path.iterdir())
-    assert left == ["DP-10-100.png", "HDMI-A-1-100.png", "notes.txt"]
+    assert left == sorted(["DP-10-100.png", "HDMI-A-1-100.png", "notes.txt", os.path.basename(path)])
     assert path != store.new_crop_path("DP-1")               # never the same name twice
 
 

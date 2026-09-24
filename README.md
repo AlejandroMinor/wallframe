@@ -74,6 +74,7 @@ for_window [app_id="io.github.AlejandroMinor.wallframe"] floating enable
 | Move the background instead of the image | Fill panel | `B` |
 | Mirror / flip / rotate 90° | Toolbar | `H` / `V` / `R` |
 | Reset to the original image, centered | Toolbar | `0` |
+| Discard changes since the last Apply | Toolbar | `D` |
 | Rule-of-thirds grid | Toolbar | `G` |
 | Next monitor | Monitor buttons | `Tab` |
 | Apply to the marked monitors | Apply | `Enter` |

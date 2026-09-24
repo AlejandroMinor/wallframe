@@ -1,3 +1,5 @@
+import os
+
 from . import render
 from .framing import Framing
 
@@ -56,9 +58,19 @@ class Monitor:
         return render.transform(self.thumb, self.framing)
 
     def apply(self, daemon):
-        """Crops the original image, saves the state and shows the crop on the monitor."""
+        """Crops the original image, saves the state and shows the crop on the monitor.
+
+        Raises OSError if the image is gone or the crop cannot be written; the
+        crop the monitor shows now is only deleted after the new one is saved.
+        """
         path = self.store.new_crop_path(self.name)
-        render.crop(self.image, self.framing, path)
+        try:
+            render.crop(self.image, self.framing, path)
+        except OSError:
+            if os.path.exists(path):
+                os.remove(path)  # a half-written file
+            raise
+        self.store.remove_old_crops(self.name, keep=path)
         self.store.remember(self.name, path, self.image, self.framing)
         daemon.set_image(self.name, path)
         self.shown, self.ignored = path, None

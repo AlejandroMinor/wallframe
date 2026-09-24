@@ -14,6 +14,7 @@ MARGIN = 60  # canvas space around the frame, to see what is left out
 ZOOM_STEP = 1.1
 FLASH_MS = 3000  # how long status bar messages stay
 KEY_ACTIONS = {"h": "mirror", "v": "flip", "r": "rotate", "0": "reset", "KP_0": "reset"}
+DISCARD_KEY = "d"
 ZOOM_KEYS = {"plus": ZOOM_STEP, "equal": ZOOM_STEP, "KP_Add": ZOOM_STEP,
              "minus": 1 / ZOOM_STEP, "KP_Subtract": 1 / ZOOM_STEP}
 ARROW_KEYS = {"Left": (-1, 0), "Right": (1, 0), "Up": (0, -1), "Down": (0, 1)}
@@ -30,6 +31,7 @@ SHORTCUTS = [
         ("V", "Flip upside down"),
         ("R", "Rotate 90°"),
         ("0", "Reset to the original image, centered"),
+        ("D", "Discard changes since the last Apply"),
     ]),
     ("Background (zoomed out, Blur fill)", [
         ("B", "Move the background instead of the image"),
@@ -175,15 +177,18 @@ class Window(Gtk.ApplicationWindow):
                 ("object-rotate-right-symbolic", "Rotate 90° (R)", "rotate"),
                 ("edit-undo-symbolic", "Reset to the original image, centered (0)", "reset")):
             tools.append(icon_button(icon, tip, lambda action=action: self.edit(action)))
+        self.discard_button = icon_button("document-revert-symbolic",
+                                          "Discard changes since the last Apply (D)", self.discard)
+        tools.append(self.discard_button)
         self.grid_button = icon_button("view-grid-symbolic", "Rule-of-thirds grid (G)",
                                        self.on_grid_button, toggle=True)
         self.grid_button.set_active(self.show_grid)
         tools.append(self.grid_button)
-        apply_button = Gtk.Button(label="Apply", tooltip_text="Apply the marked monitors (Enter)",
-                                  focusable=False, margin_start=6)
-        apply_button.add_css_class("suggested-action")
-        apply_button.connect("clicked", lambda _b: self.apply())
-        tools.append(apply_button)
+        self.apply_button = Gtk.Button(label="Apply", focusable=False, margin_start=6,
+                                       tooltip_text="Apply the marked monitors (Enter)")
+        self.apply_button.add_css_class("suggested-action")
+        self.apply_button.connect("clicked", lambda _b: self.apply())
+        tools.append(self.apply_button)
 
         top = Gtk.Box(spacing=12, margin_top=8, margin_bottom=8, margin_start=10, margin_end=10)
         top.append(row)
@@ -418,6 +423,8 @@ class Window(Gtk.ApplicationWindow):
         """Syncs the bars with the current monitor and redraws."""
         for monitor, button in zip(self.monitors, self.buttons):
             button.name_label.set_label(f"● {monitor.name}" if monitor.touched else monitor.name)
+        self.apply_button.set_sensitive(any(m.touched for m in self.monitors))
+        self.discard_button.set_sensitive(self.monitor.touched)
         monitor = self.monitor
         framing = monitor.framing
         moving = self.moving
@@ -455,6 +462,14 @@ class Window(Gtk.ApplicationWindow):
     def edit(self, action):
         self.monitor.edit(action)
         self.refresh()
+
+    def discard(self):
+        """Back to what the monitor shows now, dropping this session's changes on it."""
+        if self.monitor.touched:
+            self.monitor.discard_edit()
+            self.move_backdrop.set_active(False)
+            self.refresh()
+            self.flash(f"Changes to {self.monitor.name} discarded", "accent")
 
     def on_grid_button(self):
         self.show_grid = self.grid_button.get_active()
@@ -536,6 +551,8 @@ class Window(Gtk.ApplicationWindow):
             self.apply()
         elif key in KEY_ACTIONS:
             self.edit(KEY_ACTIONS[key])
+        elif key == DISCARD_KEY:
+            self.discard()
         elif key == "g":
             self.grid_button.set_active(not self.grid_button.get_active())
         elif key == "b":
@@ -568,11 +585,20 @@ class Window(Gtk.ApplicationWindow):
         if not touched:
             self.flash("Nothing to apply", "warning")
             return
+        failed = []
         for monitor in touched:
-            monitor.apply(self.daemon)
+            try:
+                monitor.apply(self.daemon)
+            except OSError as error:  # the others still apply
+                reason = "image not found" if isinstance(error, FileNotFoundError) else (
+                    error.strerror or str(error))
+                failed.append(f"{monitor.name}: {reason}")
         self.move_backdrop.set_active(False)  # back to moving the image
         self.refresh()
-        self.flash("Applied", "success")
+        if failed:
+            self.flash(f"Could not apply {'; '.join(failed)}", "error")
+        else:
+            self.flash("Applied", "success")
 
     def sync_with_daemon(self, then=None, ask_postponed=True):
         """Reloads monitors whose wallpaper changed elsewhere; asks about edited ones.

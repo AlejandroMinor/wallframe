@@ -34,16 +34,20 @@ class Store:
         return shown, None
 
     def new_crop_path(self, monitor):
-        """Deletes the monitor's old crops and returns a new, unused path.
+        """A new, unused path for the monitor's next crop.
 
         The daemon caches images by path, so a reused name would show the old crop.
         """
         os.makedirs(self.directory, exist_ok=True)
+        return os.path.join(self.directory, f"{monitor}-{time.time_ns()}.png")
+
+    def remove_old_crops(self, monitor, keep):
+        """Deletes the monitor's crops except `keep`, once the new one is safely written."""
         own = re.compile(re.escape(monitor) + r"-\d+\.png")
         for name in os.listdir(self.directory):
-            if own.fullmatch(name):
-                os.remove(os.path.join(self.directory, name))
-        return os.path.join(self.directory, f"{monitor}-{time.time_ns()}.png")
+            path = os.path.join(self.directory, name)
+            if own.fullmatch(name) and path != keep:
+                os.remove(path)
 
     def remember(self, monitor, crop, source, framing):
         """Saves that `monitor` shows `crop`, made from `source` with `framing`."""
