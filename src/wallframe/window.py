@@ -131,6 +131,7 @@ class Window(Gtk.ApplicationWindow):
         self.monitors, self.daemon, self.index = monitors, daemon, start
         self.upscaler = upscaler  # None when Upscayl is not installed
         self.upscaling = set()    # names of the monitors being upscaled now
+        self.ai_step, self.ai_pictures = 0, 0  # picture being upscaled, of how many
         self.previews = {}    # monitor name -> (image, mirror and rotation, cairo surface)
         self.backgrounds = {}  # monitor name -> (image, transform and fill, cairo surface)
         self.show_grid = True
@@ -309,6 +310,9 @@ class Window(Gtk.ApplicationWindow):
         self.ai_compare.connect("clicked", lambda _b: self.open_compare())
         self.ai_status = Gtk.Label(xalign=0, wrap=True, max_width_chars=36)
         self.ai_status.add_css_class("dim-label")
+        self.ai_progress = Gtk.ProgressBar(show_text=True, valign=Gtk.Align.CENTER)
+        self.ai_progress.set_size_request(180, -1)
+        self.ai_progress.set_visible(False)
 
         grid = Gtk.Grid(row_spacing=10, column_spacing=12)
         self.ai_use_label = Gtk.Label(label="Use", xalign=0)
@@ -317,6 +321,7 @@ class Window(Gtk.ApplicationWindow):
                 (Gtk.Label(label="Scale", xalign=0), self.ai_scale),
                 (None, self.ai_all),
                 (None, self.ai_run),
+                (None, self.ai_progress),
                 (self.ai_use_label, self.ai_choice),
                 (None, self.ai_compare),
                 (None, self.ai_status))):
@@ -595,6 +600,7 @@ class Window(Gtk.ApplicationWindow):
         running = any(m.name in self.upscaling for m in self.upscale_targets())
         self.ai_run.set_sensitive(not running)
         self.ai_run.set_label("Upscaling…" if running else "Upscale")
+        self.ai_progress.set_visible(running)
         pictures = len({m.original for m in self.monitors})
         self.ai_all.set_label("All monitors · same picture, upscaled once" if pictures == 1
                               else f"All monitors · {pictures} pictures, one after another")
@@ -606,8 +612,28 @@ class Window(Gtk.ApplicationWindow):
         (self.ai_upscaled if using_copy else self.ai_original).set_active(True)
         self.syncing = False
         self.ai_status.set_label(
-            "Runs in the background: you can keep editing." if running else
+            self.ai_busy_text() if running else
             "Upscaling always starts from the original." if has_copy else "")
+
+    def ai_busy_text(self):
+        """What the panel says while it works: which picture, of how many."""
+        if self.ai_pictures > 1:
+            return f"Picture {self.ai_step} of {self.ai_pictures} · you can keep editing"
+        return "Runs in the background: you can keep editing."
+
+    def ai_step_started(self, step, total):
+        """Puts the bar back to the start and names the picture that begins."""
+        self.ai_step, self.ai_pictures = step, total
+        self.ai_progress.set_fraction(0)
+        self.ai_progress.set_text(f"{step} / {total}")
+        self.refresh_ai()
+        return False  # run once
+
+    def ai_step_advanced(self, done):
+        """The share of the image Upscayl has finished, from the percentage it prints."""
+        self.ai_progress.set_fraction(done / 100)
+        self.ai_progress.set_text(f"{done:.0f}%")
+        return False  # run once
 
     def upscale_targets(self):
         """The monitors an Upscale click covers: this one, or all of them."""
@@ -619,22 +645,30 @@ class Window(Gtk.ApplicationWindow):
         It takes seconds on a GPU and more without one, so the window stays usable
         and the result lands when it is ready, even if another monitor is selected.
         Each different picture runs once, one after another; monitors that show
-        the same picture share the result.
+        the same picture share the result. The panel counts the pictures and shows
+        the percentage Upscayl reports, so the wait is visibly a wait.
         """
         targets = self.upscale_targets()
         model = self.upscaler.models[self.ai_model.get_selected()][0]
         scale = upscalers.SCALES[self.ai_scale.get_selected()]
         originals = list(dict.fromkeys(m.original for m in targets))  # distinct, in order
         self.upscaling.update(m.name for m in targets)
+        self.ai_step_started(1, len(originals))
         self.refresh()
         names = ", ".join(m.name for m in targets)
         self.flash(f"Upscaling {names} ×{scale}…", "accent")
 
+        def report(line):
+            done = upscalers.percent(line)
+            if done is not None:
+                GLib.idle_add(self.ai_step_advanced, done)
+
         def work():
             results, errors = {}, {}
-            for original in originals:
+            for step, original in enumerate(originals, start=1):
+                GLib.idle_add(self.ai_step_started, step, len(originals))
                 try:
-                    results[original] = self.upscaler.upscale(original, model, scale)
+                    results[original] = self.upscaler.upscale(original, model, scale, report)
                 except OSError as failure:
                     errors[original] = failure
             GLib.idle_add(self.upscaled, targets, results, errors, scale)

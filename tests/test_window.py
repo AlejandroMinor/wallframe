@@ -12,6 +12,7 @@ import pytest
 pytest.importorskip("gi")  # only the window needs GTK
 from PIL import Image  # noqa: E402
 
+from wallframe import upscalers  # noqa: E402
 from wallframe.daemons import Daemon, Output  # noqa: E402
 from wallframe.monitor import Monitor  # noqa: E402
 from wallframe.state import Store  # noqa: E402
@@ -43,6 +44,21 @@ class Widget:
 
     def popdown(self):
         self.active = False
+
+
+class Bar:
+    """Stands in for the progress bar, which only records what it is told."""
+    def __init__(self):
+        self.shown, self.text, self.visible = None, None, None
+
+    def set_fraction(self, fraction):
+        self.shown = fraction
+
+    def set_text(self, text):
+        self.text = text
+
+    def set_visible(self, visible):
+        self.visible = visible
 
 
 class StandIn:
@@ -176,6 +192,56 @@ def test_the_fill_message_also_says_it_only_shows_when_zoomed_out(tmp_path):
 
     Window.copy_settings(window, other)
     assert window.flashed[0][1] == "Copied the fill from DP-2; it shows when zoomed out"
+
+
+# --- Upscale: the panel says which picture it is on, and how far along it is
+
+
+def test_one_picture_running_says_it_keeps_the_window_usable(tmp_path):
+    window = StandIn([monitor_on(tmp_path, "DP-1", 90, 160, wallpaper(tmp_path))])
+    window.ai_pictures = 1
+    assert Window.ai_busy_text(window) == "Runs in the background: you can keep editing."
+
+
+def test_several_pictures_are_counted(tmp_path):
+    """Monitors with different pictures upscale one after another; say which is which."""
+    window = StandIn([monitor_on(tmp_path, "DP-1", 90, 160, wallpaper(tmp_path, "a.png")),
+                      monitor_on(tmp_path, "DP-2", 90, 160, wallpaper(tmp_path, "b.png"))])
+    window.ai_step, window.ai_pictures = 2, 3
+    assert Window.ai_busy_text(window) == "Picture 2 of 3 · you can keep editing"
+
+
+def test_the_bar_starts_over_and_then_follows_the_percentage(tmp_path):
+    window = StandIn([monitor_on(tmp_path, "DP-1", 90, 160, wallpaper(tmp_path))])
+    window.ai_progress = Bar()
+    Window.ai_step_started(window, 2, 3)
+    assert (window.ai_progress.shown, window.ai_progress.text) == (0.0, "2 / 3")
+    Window.ai_step_advanced(window, 62.5)
+    assert (window.ai_progress.shown, window.ai_progress.text) == (0.625, "62%")
+
+
+def test_the_upscale_panel_really_builds(tmp_path, monkeypatch):
+    """Builds it with the arguments it is really constructed with.
+
+    A bad argument there only shows up as a TypeError inside the activate
+    handler, and GTK then keeps running with no window and no clue why.
+    """
+    monkeypatch.setattr(upscalers, "_MODEL_DIRS", (str(tmp_path / "models"),))
+    (tmp_path / "models").mkdir()
+    (tmp_path / "models" / "upscayl-standard-4x.param").write_text("")
+
+    class Panel:
+        monitors, upscaler = [object()], upscalers.Upscaler("upscayl-ncnn",
+                                                           str(tmp_path / "models"))
+
+        def __getattr__(self, name):
+            """The real methods, so the signals it connects are the real ones."""
+            return getattr(Window, name).__get__(self)
+
+    panel = Panel()
+    assert Window.build_ai_popover(panel) is not None
+    for name in ("ai_model", "ai_scale", "ai_run", "ai_progress", "ai_status"):
+        assert getattr(panel, name) is not None, name
 
 
 # --- Keys: Ctrl and Alt belong to the desktop
