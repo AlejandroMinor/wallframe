@@ -54,10 +54,12 @@ class Monitor:
         self.framing.restore(self.applied_framing)
 
     def copy_limits(self, other):
-        """Why `other`'s position cannot be copied here, or None when it can.
+        """Why `other`'s framing cannot be taken whole here, or None when it can.
 
-        The fill always copies. The position needs the same image, and a
-        monitor of the same shape: positions scale with the monitor size.
+        Taken whole it brings the mirror, the rotation, the zoom and the
+        position, which need the same image and a monitor of the same shape:
+        positions scale with the monitor size. Only the fill survives without
+        those, because it is the same wherever it lands.
         """
         if other.image != self.image:
             return "different image"
@@ -66,7 +68,7 @@ class Monitor:
         return None
 
     def copy_from(self, other):
-        """Takes `other`'s fill, and its position too when copy_limits allows it."""
+        """Takes `other`'s framing whole, or just its fill when copy_limits blocks it."""
         if self.copy_limits(other):
             self.framing.fill = other.framing.fill
             self.framing.fill_color = other.framing.fill_color

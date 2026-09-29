@@ -480,7 +480,7 @@ class Window(Gtk.ApplicationWindow):
             if source is self.monitor:
                 continue
             limits = self.monitor.copy_limits(source)
-            what = "position and fill" if limits is None else f"fill only ({limits})"
+            what = "everything" if limits is None else f"fill only ({limits})"
             name = Gtk.Label(xalign=0)
             name.set_markup(f"<b>{GLib.markup_escape_text(source.name)}</b>")
             detail = Gtk.Label(label=what, xalign=0)
@@ -502,7 +502,7 @@ class Window(Gtk.ApplicationWindow):
         self.move_backdrop.set_active(False)
         self.refresh()
         if limits is None:
-            self.flash(f"Copied position and fill from {source.name}", "accent")
+            self.flash(f"Copied everything from {source.name}", "accent")
         elif target.framing.covers:
             self.flash(f"Copied the fill from {source.name}; it shows when zoomed out", "accent")
         else:
