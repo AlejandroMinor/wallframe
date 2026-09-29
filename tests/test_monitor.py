@@ -18,6 +18,13 @@ class FakeDaemon:
         self.shown[output] = path
 
 
+class RefusingDaemon(FakeDaemon):
+    """A daemon that will not take the crop, the way awww does on a stale output name."""
+
+    def set_image(self, output, path):
+        raise OSError(None, f"awww failed: unknown output: {output}")
+
+
 def portrait_monitor(tmp_path, image=None):
     if image is None:
         image = tmp_path / "wallpaper.png"
@@ -129,6 +136,24 @@ def test_failed_apply_keeps_the_crop_the_monitor_shows(tmp_path):
     assert os.path.exists(shown)                            # still there for the next login
     assert daemon.shown["DP-1"] == shown
     assert m.touched                                        # the edit is still pending
+
+
+def test_a_daemon_that_refuses_keeps_what_the_monitor_shows(tmp_path):
+    m = portrait_monitor(tmp_path)
+    daemon = FakeDaemon()
+    m.edit("mirror")
+    m.apply(daemon)
+    shown = daemon.shown["DP-1"]
+    m.edit("rotate")
+    with pytest.raises(OSError):
+        m.apply(RefusingDaemon())
+    assert os.path.exists(shown)                            # the old crop survives
+    assert m.shown == shown                                 # the monitor is where it was
+    assert m.touched and m.ignored is None                  # the edit is still pending
+    assert m.store.load()["DP-1"]["crop"] == shown           # and the state still knows it
+    crops = [p.name for p in (tmp_path / "data").iterdir() if p.suffix == ".png"]
+    assert os.path.basename(shown) in crops                  # the old crop, and the new one
+    assert len(crops) == 2                                   # left unused, for the next apply
 
 
 def monitor_on(tmp_path, name, width, height, image):

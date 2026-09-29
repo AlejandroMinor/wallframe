@@ -86,8 +86,11 @@ class Monitor:
     def apply(self, daemon):
         """Crops the original image, saves the state and shows the crop on the monitor.
 
-        Raises OSError if the image is gone or the crop cannot be written; the
-        crop the monitor shows now is only deleted after the new one is saved.
+        Raises OSError if the image is gone, the crop cannot be written or the
+        daemon refuses it. Nothing is deleted or forgotten until the daemon has
+        the new crop, so a failure leaves the monitor showing the crop it had and
+        this edit still pending; the crop just written stays on disk unused, and
+        the next apply clears it away.
         """
         path = self.store.new_crop_path(self.name)
         try:
@@ -96,8 +99,8 @@ class Monitor:
             if os.path.exists(path):
                 os.remove(path)  # a half-written file
             raise
-        self.store.remove_old_crops(self.name, keep=path)
-        self.store.remember(self.name, path, self.image, self.framing)
         daemon.set_image(self.name, path)
+        self.store.remember(self.name, path, self.image, self.framing)
+        self.store.remove_old_crops(self.name, keep=path)
         self.shown, self.ignored = path, None
         self.mark_applied()
