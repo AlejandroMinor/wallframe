@@ -1,8 +1,9 @@
 import hashlib
 import os
+import re
 import shutil
 
-from .commands import run_or_fail
+from .commands import run_reporting
 from .state import DATA_DIR
 
 # Upscayl's command-line engine, where its packages put it: the AUR package
@@ -17,6 +18,10 @@ MODELS = [
     ("ultrasharp-4x", "Ultrasharp"),
 ]
 SCALES = (2, 3, 4)
+# Upscayl marks the work with bare percentages on stderr, and its device banner
+# and resize notes carry numbers too, so only a line that is nothing but the
+# percentage counts as progress.
+_TILE = re.compile(r"(\d+(?:\.\d+)?)%")
 # Kept with the crops, not in ~/.cache: state.json points at them to resume.
 UPSCALED_DIR = os.path.join(DATA_DIR, "upscaled")
 INSTALL_HELP = (
@@ -40,8 +45,10 @@ class Upscaler:
         """True for an image this upscaler made, so it is never upscaled again."""
         return os.path.dirname(os.path.abspath(path)) == os.path.abspath(self.directory)
 
-    def upscale(self, source, model, scale):
+    def upscale(self, source, model, scale, report=None):
         """Returns `source` enlarged `scale` times with `model`, made once and then reused.
+
+        `report` gets each line of Upscayl's output as it arrives, for a progress bar.
 
         Raises OSError when Upscayl fails, e.g. with no Vulkan GPU.
         """
@@ -54,8 +61,8 @@ class Upscaler:
         os.makedirs(self.directory, exist_ok=True)
         partial = path[:-len(".png")] + ".part.png"  # the extension picks the format
         try:
-            run_or_fail([self.program, "-i", source, "-o", partial, "-m", self.models_dir,
-                         "-n", model, "-s", str(scale)])
+            run_reporting([self.program, "-i", source, "-o", partial, "-m", self.models_dir,
+                           "-n", model, "-s", str(scale)], report)
             os.replace(partial, path)
         except OSError:
             if os.path.exists(partial):
@@ -71,6 +78,12 @@ class Upscaler:
             path = os.path.join(self.directory, name)
             if path not in keep:
                 os.remove(path)
+
+
+def percent(line):
+    """How far along an upscale is, 0 to 100, or None for a line that is not progress."""
+    found = _TILE.match(line.strip())
+    return float(found.group(1)) if found else None
 
 
 def detect():

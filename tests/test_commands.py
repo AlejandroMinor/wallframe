@@ -1,6 +1,8 @@
 """Tests for how errors reach the user; no program is really started."""
 
+import io
 import subprocess
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -94,3 +96,61 @@ def test_a_failure_reads_as_one_clean_line(monkeypatch, stderr, reason):
     with pytest.raises(OSError) as failed:
         commands.run_or_fail(["awww", "img"])
     assert failed.value.strerror == f"awww failed: {reason}"
+
+
+def speaker(lines, returncode=0):
+    """A program that printed `lines`, for run_reporting to read."""
+    def popen(cmd, **kwargs):
+        popen.cmd = cmd
+        popen.kwargs = kwargs
+        return MagicMock(stdout=io.StringIO("".join(lines)), wait=lambda: returncode)
+    return popen
+
+
+def test_reports_every_line_before_the_program_ends(monkeypatch):
+    monkeypatch.setattr(commands.subprocess, "Popen", speaker(["one\n", "two\n"]))
+    seen = []
+    commands.run_reporting(["upscayl-ncnn", "-i", "in.png"], seen.append)
+    assert seen == ["one\n", "two\n"]
+
+
+def test_both_streams_are_read_together(monkeypatch):
+    """Folding stderr into stdout keeps one reader and no pipe that fills up."""
+    popen = speaker([])
+    monkeypatch.setattr(commands.subprocess, "Popen", popen)
+    commands.run_reporting(["upscayl-ncnn"])
+    assert popen.kwargs["stderr"] == subprocess.STDOUT
+    assert popen.kwargs["stdout"] == subprocess.PIPE
+
+
+def test_works_without_anybody_listening(monkeypatch):
+    monkeypatch.setattr(commands.subprocess, "Popen", speaker(["done\n"]))
+    assert commands.run_reporting(["upscayl-ncnn"]) == "done\n"
+
+
+def test_a_failure_blames_the_error_and_not_the_banner(monkeypatch):
+    monkeypatch.setattr(commands.subprocess, "Popen", speaker(
+        ["\U0001f680 Starting Upscayl - Copyright © 2024\n",
+         "vkCreateInstance failed -9\n",
+         "\U0001f6a8 Error: Invalid GPU Device\n"], returncode=1))
+    with pytest.raises(OSError) as failed:
+        commands.run_reporting(["upscayl-ncnn", "-i", "in.png"])
+    assert failed.value.strerror == "upscayl-ncnn failed: Invalid GPU Device"
+
+
+def test_a_failure_that_says_nothing_still_says_something(monkeypatch):
+    monkeypatch.setattr(commands.subprocess, "Popen", speaker([], returncode=127))
+    with pytest.raises(OSError) as failed:
+        commands.run_reporting(["upscayl-ncnn"])
+    assert failed.value.strerror == "upscayl-ncnn failed: exit 127"
+
+
+def test_a_program_that_never_starts_does_not_look_like_a_missing_file(monkeypatch):
+    def missing(cmd, **kwargs):
+        raise FileNotFoundError(2, "No such file or directory")
+
+    monkeypatch.setattr(commands.subprocess, "Popen", missing)
+    with pytest.raises(OSError) as failed:
+        commands.run_reporting(["upscayl-ncnn"])
+    assert not isinstance(failed.value, FileNotFoundError)
+    assert failed.value.strerror == "upscayl-ncnn could not be started: No such file or directory"
