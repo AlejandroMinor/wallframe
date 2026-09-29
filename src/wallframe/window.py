@@ -581,6 +581,9 @@ class Window(Gtk.ApplicationWindow):
         return True
 
     def on_key(self, _controller, keyval, _code, state):
+        if state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.ALT_MASK):
+            # Left to the desktop: Ctrl+D would discard the framing and Ctrl+H mirror it.
+            return False
         key = Gdk.keyval_name(Gdk.keyval_to_lower(keyval))
         open_panel = next((b for b in (self.fill_button, self.help_button) if b.get_active()),
                           None)
