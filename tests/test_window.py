@@ -21,6 +21,14 @@ from gi.repository import Gdk  # noqa: E402
 NO_DAEMON = "wallframe-no-existe-este-programa"
 
 
+class UntouchableDaemon:
+    """For tests that must fail before reaching the daemon: never the real awww,
+    which would change the wallpaper on the machine running the tests."""
+
+    def set_image(self, output, path):
+        raise AssertionError(f"the daemon was reached for {output}")
+
+
 class Widget:
     """Stands in for the buttons and menus these methods touch."""
 
@@ -102,7 +110,7 @@ def test_a_missing_wallpaper_says_so(tmp_path):
     monitor = monitor_on(tmp_path, "DP-1", 90, 160, image)
     monitor.edit("rotate")
     os.remove(image)
-    window = StandIn([monitor], Daemon("awww"))
+    window = StandIn([monitor], UntouchableDaemon())
     Window.apply_touched(window)
     assert window.flashed[0][1] == "Could not apply DP-1: image not found"
 

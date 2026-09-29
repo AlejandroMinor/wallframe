@@ -77,3 +77,20 @@ def test_a_command_that_is_not_installed_does_not_look_like_a_missing_file(monke
 def test_queries_stay_silent_about_failing(monkeypatch):
     monkeypatch.setattr(commands.subprocess, "run", completes(1, err="no socket"))
     assert commands.run(["awww", "query"]) == ""
+
+
+@pytest.mark.parametrize("stderr, reason", [
+    # What awww really prints for an output that does not exist.
+    ('Error: "none of the requested outputs are valid"\n',
+     "none of the requested outputs are valid"),
+    # And for a bad argument, with a hint on the lines after.
+    ("error: invalid value '/tmp/x.png' for '<IMAGE>': Path '/tmp/x.png' does not exist\n\n"
+     "For more information, try '--help'.\n",
+     "invalid value '/tmp/x.png' for '<IMAGE>': Path '/tmp/x.png' does not exist"),
+    ("\n  unknown output: DP-9  \n", "unknown output: DP-9"),
+])
+def test_a_failure_reads_as_one_clean_line(monkeypatch, stderr, reason):
+    monkeypatch.setattr(commands.subprocess, "run", completes(1, err=stderr))
+    with pytest.raises(OSError) as failed:
+        commands.run_or_fail(["awww", "img"])
+    assert failed.value.strerror == f"awww failed: {reason}"

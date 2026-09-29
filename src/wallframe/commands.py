@@ -30,9 +30,22 @@ def run_or_fail(cmd):
     except OSError as error:  # the program is missing or cannot be started
         raise OSError(None, f"{cmd[0]} could not be started: {error.strerror}") from error
     if done.returncode:
-        reason = done.stderr.strip() or f"exit {done.returncode}"
+        reason = _first_line(done.stderr) or f"exit {done.returncode}"
         raise OSError(None, f"{cmd[0]} failed: {reason}")
     return done.stdout
+
+
+def _first_line(stderr):
+    """The gist of an error message, for the status bar.
+
+    awww prints 'Error: "none of the requested outputs are valid"', and for bad
+    arguments adds lines such as "For more information, try '--help'."; the
+    first line, without the "Error:" prefix and the quotes, says it all.
+    """
+    line = next((line.strip() for line in stderr.splitlines() if line.strip()), "")
+    if line.lower().startswith("error:"):
+        line = line[len("error:"):].strip()
+    return line.strip('"')
 
 
 def notify(message):
