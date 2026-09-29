@@ -1,7 +1,7 @@
 import re
 from dataclasses import dataclass
 
-from .commands import run
+from .commands import run, run_or_fail
 
 # ": DP-1: 1080x1920, scale: 1, currently displaying: image: /path/to/file.jpg"
 # Outputs showing a plain color end in "color: 000000" instead and are skipped.
@@ -37,9 +37,13 @@ class Daemon:
         return parse_query(run([self.program, "query"]))
 
     def set_image(self, output, path):
-        """Shows `path` on one output; --resize no because it is already cropped to size."""
-        run([self.program, "img", "-o", output, "--resize", "no",
-             "--transition-type", "fade", "--transition-duration", "0.4", path])
+        """Shows `path` on one output; --resize no because it is already cropped to size.
+
+        Raises OSError when the daemon refuses it, so the caller can keep the
+        crop the output shows now.
+        """
+        run_or_fail([self.program, "img", "-o", output, "--resize", "no",
+                     "--transition-type", "fade", "--transition-duration", "0.4", path])
 
 
 def detect():
