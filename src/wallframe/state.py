@@ -54,5 +54,14 @@ class Store:
         state = self.load()
         state[monitor] = {"crop": crop, "source": source, **framing.to_dict()}
         os.makedirs(self.directory, exist_ok=True)
-        with open(self.state_file, "w") as f:
-            json.dump(state, f, indent=2)
+        # Written aside, then swapped in: opening state.json for writing would
+        # empty it first, and a failure halfway would lose every monitor's entry.
+        temporary = self.state_file + ".tmp"
+        try:
+            with open(temporary, "w") as f:
+                json.dump(state, f, indent=2)
+            os.replace(temporary, self.state_file)
+        except OSError:
+            if os.path.exists(temporary):
+                os.remove(temporary)
+            raise

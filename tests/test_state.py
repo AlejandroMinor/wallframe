@@ -2,6 +2,8 @@
 
 import os
 
+import pytest
+
 from wallframe.framing import Framing
 from wallframe.state import Store
 
@@ -68,3 +70,18 @@ def test_each_monitor_keeps_its_own_entry(tmp_path):
     store.remember("DP-1", "a.png", "a.jpg", edited_framing())
     store.remember("DP-2", "b.png", "b.jpg", edited_framing())
     assert set(store.load()) == {"DP-1", "DP-2"}
+
+
+def test_a_failed_save_keeps_the_previous_state(tmp_path, monkeypatch):
+    store = Store(tmp_path)
+    store.remember("DP-1", "a.png", "a.jpg", edited_framing())
+    before = (tmp_path / "state.json").read_text()
+
+    def disk_full(*args, **kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr("wallframe.state.json.dump", disk_full)
+    with pytest.raises(OSError):
+        store.remember("DP-2", "b.png", "b.jpg", edited_framing())
+    assert (tmp_path / "state.json").read_text() == before   # DP-1 is still remembered
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["state.json"]   # no leftover
