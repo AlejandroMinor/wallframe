@@ -128,10 +128,10 @@ def test_zooming_out_leaves_gaps():
 
 def test_a_smaller_image_stays_inside_the_monitor():
     f = portrait()
-    f.zoom_at(0.01, 0, 0)                                   # 1080 wide, 607 high: gaps above and below
-    f.move_to(-5000, 5000)
-    assert f.x == pytest.approx(0)                          # width still fills: covers that axis
-    assert f.y == pytest.approx(f.monitor_h - f.image_h * f.zoom)   # height: stops at the bottom edge
+    f.zoom_at(0.01, 0, 0)                   # as small as it gets: 540x304, gaps on every side
+    f.move_to(-5000, 5000)                  # pushed past the left and bottom edges
+    assert f.x == pytest.approx(0)                                  # stops at the left edge
+    assert f.y == pytest.approx(f.monitor_h - f.image_h * f.zoom)   # and at the bottom one
 
 
 def test_placement_is_the_whole_monitor_when_covering():

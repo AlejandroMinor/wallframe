@@ -61,7 +61,8 @@ def test_old_crops_go_only_after_the_new_one_and_only_that_monitors(tmp_path):
     open(path, "wb").close()
     store.remove_old_crops("DP-1", keep=path)
     left = sorted(p.name for p in tmp_path.iterdir())
-    assert left == sorted(["DP-10-100.png", "HDMI-A-1-100.png", "notes.txt", os.path.basename(path)])
+    kept = ["DP-10-100.png", "HDMI-A-1-100.png", "notes.txt", os.path.basename(path)]
+    assert left == sorted(kept)
     assert path != store.new_crop_path("DP-1")               # never the same name twice
 
 

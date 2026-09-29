@@ -55,7 +55,7 @@ def test_mirror_and_flip_are_applied(tmp_path):
 
 def test_rotation_turns_clockwise(tmp_path):
     source = quadrants(tmp_path / "src.png")
-    f = Framing(200, 400, 400, 200)                         # portrait monitor, exact fit once turned
+    f = Framing(200, 400, 400, 200)         # portrait monitor, exact fit once turned
     f.rotate()
     render.crop(source, f, tmp_path / "out.png")
     # Turned clockwise, the left column (red, blue) becomes the top row (blue, red).

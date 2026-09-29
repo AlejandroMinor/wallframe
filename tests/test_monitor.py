@@ -188,7 +188,8 @@ def test_copy_only_the_fill_from_another_image_or_shape(tmp_path):
     other_shape = monitor_on(tmp_path, "DP-3", 2560, 1440, first)
     source.framing.zoom_at(0.6, 0, 0)
     source.framing.fill, source.framing.fill_color = "color", "#123456"
-    for target, reason in ((other_image, "different image"), (other_shape, "different screen shape")):
+    cases = ((other_image, "different image"), (other_shape, "different screen shape"))
+    for target, reason in cases:
         assert target.copy_limits(source) == reason
         target.copy_from(source)
         assert (target.framing.fill, target.framing.fill_color) == ("color", "#123456")
