@@ -23,6 +23,7 @@ sudo pacman -S gtk4 python-gobject python-cairo python-pillow awww
 Optional:
 
 - Hyprland or sway: wallframe opens on the focused monitor and shows the model of each monitor.
+- [Upscayl](https://github.com/upscayl/upscayl): the **Upscale** panel enlarges low-resolution images ×2, ×3 or ×4 before cropping, on one monitor or all of them at once. You can compare the result with the original at real size, and go back to the original at any time. It needs a Vulkan GPU, and the native package: on Arch, `upscayl-bin` from the AUR; elsewhere, the official .deb or .rpm. The Flatpak and AppImage do not work.
 - `libnotify`: errors appear as notifications, which helps when you start wallframe without a terminal. On Hyprland, errors appear as Hyprland notifications even without it.
 
 ## Install

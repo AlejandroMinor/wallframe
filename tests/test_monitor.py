@@ -194,3 +194,55 @@ def test_copy_only_the_fill_from_another_image_or_shape(tmp_path):
         target.copy_from(source)
         assert (target.framing.fill, target.framing.fill_color) == ("color", "#123456")
         assert target.framing.relative_zoom == pytest.approx(1)    # position untouched
+
+
+def test_a_larger_copy_keeps_the_framing_and_can_be_discarded(tmp_path):
+    m = portrait_monitor(tmp_path)
+    m.framing.zoom_at(1.5, 40, 80)
+    m.framing.move_to(-30, 0)
+    before = m.framing.key()
+    larger = tmp_path / "larger.png"
+    Image.new("RGB", (800, 400)).save(larger)                # the same picture, twice the size
+    m.use_image(str(larger))
+    assert m.framing.key() == before                          # it looks exactly the same
+    assert m.touched                                          # but it is a change to apply
+    m.discard_edit()
+    assert m.image != str(larger) and not m.touched
+
+
+def upscaled_copy(tmp_path, name="upscaled.png"):
+    path = tmp_path / name
+    Image.new("RGB", (800, 400), (10, 20, 30)).save(path)   # the same picture, twice the size
+    return str(path)
+
+
+def test_switch_between_original_and_upscaled(tmp_path):
+    m = portrait_monitor(tmp_path)
+    original = m.image
+    m.use_upscaled(upscaled_copy(tmp_path))
+    assert (m.image, m.original) == (m.upscaled, original)
+    assert m.touched
+    m.use_original()
+    assert m.image == original
+    assert not m.touched                                    # back to what the monitor shows
+    m.use_upscaled()                                        # the copy is still there
+    assert m.image == m.upscaled
+
+
+def test_reopening_remembers_the_original_of_an_upscaled_copy(tmp_path):
+    m = portrait_monitor(tmp_path)
+    original = m.image
+    m.use_upscaled(upscaled_copy(tmp_path))
+    daemon = FakeDaemon()
+    m.apply(daemon)
+    again = portrait_monitor(tmp_path, image=daemon.shown["DP-1"])
+    assert (again.image, again.original, again.upscaled) == (m.upscaled, original, m.upscaled)
+
+
+def test_an_upscaled_copy_is_still_the_same_picture_for_copying(tmp_path):
+    image = tmp_path / "wallpaper.png"
+    Image.new("RGB", (4000, 2000)).save(image)
+    plain = monitor_on(tmp_path, "DP-1", 1080, 1920, image)
+    upscaled = monitor_on(tmp_path, "DP-3", 1080, 1920, image)
+    upscaled.use_upscaled(upscaled_copy(tmp_path))
+    assert plain.copy_limits(upscaled) is None

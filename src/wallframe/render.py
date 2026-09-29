@@ -67,18 +67,21 @@ def background(image, framing, size):
     return backdrop if small == size else backdrop.resize(size, Image.BICUBIC)
 
 
-def crop(source, framing, destination):
-    """Saves what the monitor will show, at its exact size, gaps filled."""
+def compose(source, framing):
+    """What the monitor will show, at its exact size and gaps filled, in memory."""
     size = (framing.monitor_w, framing.monitor_h)
     with Image.open(source) as img:
         image = transform(img.convert("RGB"), framing)
         if framing.covers:
-            box = _inside(framing.crop_box(), image)
-            image.resize(size, Image.LANCZOS, box=box).save(destination)
-            return
+            return image.resize(size, Image.LANCZOS, box=_inside(framing.crop_box(), image))
         source_box, (left, top, right, bottom) = framing.placement()
         canvas = background(image, framing, size)
         box = _inside(source_box, image)
         piece = image.resize((right - left, bottom - top), Image.LANCZOS, box=box)
         canvas.paste(piece, (left, top))
-        canvas.save(destination)
+        return canvas
+
+
+def crop(source, framing, destination):
+    """Saves what the monitor will show, at its exact size, gaps filled."""
+    compose(source, framing).save(destination)

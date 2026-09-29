@@ -1,3 +1,6 @@
+import os
+import threading
+
 import cairo
 import gi
 
@@ -6,10 +9,12 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("Pango", "1.0")
 from gi.repository import Gdk, GLib, Gtk, Pango  # noqa: E402
 
-from . import render  # noqa: E402
+from . import render, upscalers  # noqa: E402
 from .framing import BLUR_RANGE, FILLS, MAX_ZOOM  # noqa: E402
 
 APP_ID = "io.github.AlejandroMinor.wallframe"
+# wallframe's own icons, for what the icon theme has no symbol for.
+ICONS_DIR = os.path.join(os.path.dirname(__file__), "icons")
 MARGIN = 60  # canvas space around the frame, to see what is left out
 ZOOM_STEP = 1.1
 FLASH_MS = 3000  # how long status bar messages stay
@@ -19,6 +24,7 @@ ZOOM_KEYS = {"plus": ZOOM_STEP, "equal": ZOOM_STEP, "KP_Add": ZOOM_STEP,
              "minus": 1 / ZOOM_STEP, "KP_Subtract": 1 / ZOOM_STEP}
 ARROW_KEYS = {"Left": (-1, 0), "Right": (1, 0), "Up": (0, -1), "Down": (0, 1)}
 HELP_KEYS = ("question", "F1")
+UPSCALE_TOOLTIP = "Enlarge a low-resolution image with AI (Upscayl)"
 # What the help panel lists: (section, [(keys, action)]).
 SHORTCUTS = [
     ("Move and zoom", [
@@ -56,19 +62,23 @@ label.error { color: @error_color; }
 """
 
 
-def run(monitors, daemon, start, focused):
+def run(monitors, daemon, start, focused, upscaler=None):
     """Opens the editor on monitors[start] and returns the exit status."""
     app = Gtk.Application(application_id=APP_ID)
     app.connect("startup", lambda _app: add_style())
-    app.connect("activate", lambda _app: Window(app, monitors, daemon, start, focused).present())
+    app.connect("activate", lambda _app: Window(app, monitors, daemon, start, focused,
+                                                upscaler).present())
     return app.run([])
 
 
 def add_style():
+    """The status bar colors and wallframe's own icons, once per display."""
+    display = Gdk.Display.get_default()
     provider = Gtk.CssProvider()
     provider.load_from_string(STYLE)
     Gtk.StyleContext.add_provider_for_display(
-        Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+    Gtk.IconTheme.get_for_display(display).add_search_path(ICONS_DIR)
 
 
 def to_surface(img):
@@ -116,9 +126,11 @@ def describe(monitor):
 
 
 class Window(Gtk.ApplicationWindow):
-    def __init__(self, app, monitors, daemon, start, focused):
+    def __init__(self, app, monitors, daemon, start, focused, upscaler=None):
         super().__init__(application=app, title="wallframe")
         self.monitors, self.daemon, self.index = monitors, daemon, start
+        self.upscaler = upscaler  # None when Upscayl is not installed
+        self.upscaling = set()    # names of the monitors being upscaled now
         self.previews = {}    # monitor name -> (image, mirror and rotation, cairo surface)
         self.backgrounds = {}  # monitor name -> (image, transform and fill, cairo surface)
         self.show_grid = True
@@ -177,6 +189,11 @@ class Window(Gtk.ApplicationWindow):
                 ("object-rotate-right-symbolic", "Rotate 90° (R)", "rotate"),
                 ("edit-undo-symbolic", "Reset to the original image, centered (0)", "reset")):
             tools.append(icon_button(icon, tip, lambda action=action: self.edit(action)))
+        # wallframe's own icon: the icon theme has none for "make the picture bigger".
+        self.ai_button = Gtk.MenuButton(icon_name="wallframe-upscale-symbolic", focusable=False,
+                                        tooltip_text=UPSCALE_TOOLTIP,
+                                        popover=self.build_ai_popover())
+        tools.append(self.ai_button)
         self.discard_button = icon_button("document-revert-symbolic",
                                           "Discard changes since the last Apply (D)", self.discard)
         tools.append(self.discard_button)
@@ -253,6 +270,60 @@ class Window(Gtk.ApplicationWindow):
                 grid.attach(Gtk.Label(label=action, xalign=0), 1, row, 1, 1)
                 row += 1
         return pinned_popover("Keyboard shortcuts", grid)
+
+    def build_ai_popover(self):
+        """Upscale with Upscayl, switch between original and upscaled, compare at 1:1.
+
+        Without Upscayl it says how to install it, since the button would do nothing.
+        """
+        if not self.upscaler:
+            text = Gtk.Label(label=upscalers.INSTALL_HELP, xalign=0, wrap=True,
+                             max_width_chars=48)
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            box.append(text)
+            box.append(Gtk.LinkButton(uri=upscalers.RELEASES_URL, label="Upscayl releases",
+                                      halign=Gtk.Align.START))
+            return pinned_popover("Upscale with AI", box)
+
+        self.ai_model = Gtk.DropDown.new_from_strings(
+            [label for _model, label in self.upscaler.models])
+        self.ai_scale = Gtk.DropDown.new_from_strings([f"×{s}" for s in upscalers.SCALES])
+        for dropdown in (self.ai_model, self.ai_scale):
+            dropdown.set_focusable(False)
+        # Monitors showing the same picture share one upscale; the label says how many run.
+        self.ai_all = Gtk.CheckButton(focusable=False, visible=len(self.monitors) > 1)
+        self.ai_all.connect("toggled", lambda _b: self.refresh_ai())
+        self.ai_run = Gtk.Button(label="Upscale", focusable=False)
+        self.ai_run.add_css_class("suggested-action")
+        self.ai_run.connect("clicked", lambda _b: self.upscale())
+
+        # Which copy the monitor uses; switching back undoes the upscaling.
+        self.ai_original = Gtk.ToggleButton(label="Original", focusable=False, hexpand=True)
+        self.ai_upscaled = Gtk.ToggleButton(label="Upscaled", focusable=False, hexpand=True,
+                                            group=self.ai_original)
+        self.ai_original.connect("toggled", self.on_ai_choice)
+        self.ai_choice = Gtk.Box(css_classes=["linked"])
+        self.ai_choice.append(self.ai_original)
+        self.ai_choice.append(self.ai_upscaled)
+        self.ai_compare = Gtk.Button(label="Compare 1:1", focusable=False)
+        self.ai_compare.connect("clicked", lambda _b: self.open_compare())
+        self.ai_status = Gtk.Label(xalign=0, wrap=True, max_width_chars=36)
+        self.ai_status.add_css_class("dim-label")
+
+        grid = Gtk.Grid(row_spacing=10, column_spacing=12)
+        self.ai_use_label = Gtk.Label(label="Use", xalign=0)
+        for row, (label, control) in enumerate((
+                (Gtk.Label(label="Model", xalign=0), self.ai_model),
+                (Gtk.Label(label="Scale", xalign=0), self.ai_scale),
+                (None, self.ai_all),
+                (None, self.ai_run),
+                (self.ai_use_label, self.ai_choice),
+                (None, self.ai_compare),
+                (None, self.ai_status))):
+            if label:
+                grid.attach(label, 0, row, 1, 1)
+            grid.attach(control, 1, row, 1, 1)
+        return pinned_popover("Upscale with AI", grid)
 
     def build_fill_popover(self):
         """Fill kind, blur strength, background moving and color, in one panel."""
@@ -432,6 +503,7 @@ class Window(Gtk.ApplicationWindow):
             button.name_label.set_label(f"● {monitor.name}" if monitor.touched else monitor.name)
         self.apply_button.set_sensitive(any(m.touched for m in self.monitors))
         self.discard_button.set_sensitive(self.monitor.touched)
+        self.refresh_ai()
         monitor = self.monitor
         framing = monitor.framing
         moving = self.moving
@@ -458,6 +530,8 @@ class Window(Gtk.ApplicationWindow):
         self.zoom_label.set_label(f"{pct}%")
         details = describe(monitor) + [
             "moving the background" if self.moving is not framing else "",
+            "upscaling…" if monitor.name in self.upscaling else "",
+            "upscaled" if monitor.image != monitor.original else "",
             "mirrored" if framing.flip_h else "",
             "flipped" if framing.flip_v else "",
             f"rotated {framing.rotation}°" if framing.rotation else ""]
@@ -507,6 +581,95 @@ class Window(Gtk.ApplicationWindow):
             self.flash(f"Copied the fill from {source.name}; it shows when zoomed out", "accent")
         else:
             self.flash(f"Copied the fill from {source.name} ({limits})", "accent")
+
+    def refresh_ai(self):
+        """Syncs the AI panel with the current monitor."""
+        if not self.upscaler:
+            return
+        monitor = self.monitor
+        # A clock on the toolbar button while any upscale runs, seen with the panel closed.
+        busy = bool(self.upscaling)
+        self.ai_button.set_icon_name("preferences-system-time-symbolic" if busy
+                                     else "wallframe-upscale-symbolic")
+        self.ai_button.set_tooltip_text("Upscaling…" if busy else UPSCALE_TOOLTIP)
+        running = any(m.name in self.upscaling for m in self.upscale_targets())
+        self.ai_run.set_sensitive(not running)
+        self.ai_run.set_label("Upscaling…" if running else "Upscale")
+        pictures = len({m.original for m in self.monitors})
+        self.ai_all.set_label("All monitors · same picture, upscaled once" if pictures == 1
+                              else f"All monitors · {pictures} pictures, one after another")
+        has_copy = monitor.upscaled is not None
+        for widget in (self.ai_use_label, self.ai_choice, self.ai_compare):
+            widget.set_visible(has_copy)
+        self.syncing = True
+        using_copy = monitor.image == monitor.upscaled
+        (self.ai_upscaled if using_copy else self.ai_original).set_active(True)
+        self.syncing = False
+        self.ai_status.set_label(
+            "Runs in the background: you can keep editing." if running else
+            "Upscaling always starts from the original." if has_copy else "")
+
+    def upscale_targets(self):
+        """The monitors an Upscale click covers: this one, or all of them."""
+        return self.monitors if self.ai_all.get_active() else [self.monitor]
+
+    def upscale(self):
+        """Enlarges the targets' original images with AI, off the main thread.
+
+        It takes seconds on a GPU and more without one, so the window stays usable
+        and the result lands when it is ready, even if another monitor is selected.
+        Each different picture runs once, one after another; monitors that show
+        the same picture share the result.
+        """
+        targets = self.upscale_targets()
+        model = self.upscaler.models[self.ai_model.get_selected()][0]
+        scale = upscalers.SCALES[self.ai_scale.get_selected()]
+        originals = list(dict.fromkeys(m.original for m in targets))  # distinct, in order
+        self.upscaling.update(m.name for m in targets)
+        self.refresh()
+        names = ", ".join(m.name for m in targets)
+        self.flash(f"Upscaling {names} ×{scale}…", "accent")
+
+        def work():
+            results, errors = {}, {}
+            for original in originals:
+                try:
+                    results[original] = self.upscaler.upscale(original, model, scale)
+                except OSError as failure:
+                    errors[original] = failure
+            GLib.idle_add(self.upscaled, targets, results, errors, scale)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def upscaled(self, targets, results, errors, scale):
+        """Back on the main thread with the upscaled copies, and what failed."""
+        for monitor in targets:
+            self.upscaling.discard(monitor.name)
+            if monitor.original in results:
+                monitor.use_upscaled(results[monitor.original])
+        self.refresh()
+        failed = [m.name for m in targets if m.original in errors]
+        if failed:
+            error = next(iter(errors.values()))
+            self.flash(f"Could not upscale {', '.join(failed)}: {error.strerror or error}",
+                       "error")
+        else:
+            names = ", ".join(m.name for m in targets)
+            self.flash(f"Upscaled {names} ×{scale} · compare it, then Apply", "success")
+        return False  # run once
+
+    def on_ai_choice(self, _button, *_args):
+        if self.syncing:
+            return
+        if self.ai_original.get_active():
+            self.monitor.use_original()
+        else:
+            self.monitor.use_upscaled()
+        self.refresh()
+
+    def open_compare(self):
+        from .compare import CompareWindow  # it imports this module
+        CompareWindow(self, self.monitor).present()
 
     def discard(self):
         """Back to what the monitor shows now, dropping this session's changes on it."""
@@ -642,6 +805,9 @@ class Window(Gtk.ApplicationWindow):
                     error.strerror or str(error))
                 failed.append(f"{monitor.name}: {reason}")
         self.move_backdrop.set_active(False)  # back to moving the image
+        if self.upscaler:
+            in_use = {path for m in self.monitors for path in (m.image, m.upscaled) if path}
+            self.upscaler.clean(in_use | self.monitors[0].store.images_in_use())
         self.refresh()
         if failed:
             self.flash(f"Could not apply {'; '.join(failed)}", "error")

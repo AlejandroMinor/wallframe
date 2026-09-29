@@ -59,6 +59,8 @@ class StandIn:
         self.copy_button = Widget()
         self.move_backdrop = Widget()
         self.grid_button = Widget()
+        self.upscaler = None  # as without Upscayl installed
+        self.upscaling = set()
         self.flashed = []
         self.closed = False
 
