@@ -17,6 +17,10 @@ class Monitor:
         """Starts editing what the output shows, resuming wallframe's last framing."""
         self.name, self.width, self.height = output.name, output.width, output.height
         self.image, saved = self.store.resume(self.name, output.image)
+        # The picture before any AI upscaling, and the upscaled copy if there is one.
+        original = (saved or {}).get("original")
+        self.original = original if original and os.path.exists(original) else self.image
+        self.upscaled = self.image if self.image != self.original else None
         self.framing = Framing(self.width, self.height, *render.image_size(self.image))
         if saved:
             self.framing.restore(saved)
@@ -28,11 +32,39 @@ class Monitor:
     def mark_applied(self):
         self.applied = self.framing.key()
         self.applied_framing = self.framing.to_dict()
+        self.applied_image = self.image
 
     @property
     def touched(self):
-        """True when the framing differs from what the monitor shows."""
-        return self.framing.key() != self.applied
+        """True when the framing or the image differ from what the monitor shows."""
+        return self.framing.key() != self.applied or self.image != self.applied_image
+
+    def framing_for(self, path):
+        """The current framing, for another copy of the same picture at another size."""
+        framing = Framing(self.width, self.height, *render.image_size(path))
+        framing.restore(self.framing.to_dict())
+        return framing
+
+    def use_upscaled(self, path=None):
+        """Edits the upscaled copy: `path` when one was just made, else the last one."""
+        self.upscaled = path or self.upscaled
+        if self.upscaled and self.image != self.upscaled:
+            self.use_image(self.upscaled)
+
+    def use_original(self):
+        """Back to the picture as it was before upscaling; the copy stays available."""
+        if self.image != self.original:
+            self.use_image(self.original)
+
+    def use_image(self, path):
+        """Edits `path` instead, keeping the framing: e.g. the same image, upscaled.
+
+        The zoom is saved relative to the image and the position in monitor
+        pixels, so a larger copy of the same picture looks exactly the same.
+        """
+        self.framing = self.framing_for(path)
+        self.image = path
+        self.thumb = render.thumbnail(path, PREVIEW_MAX)
 
     @property
     def portrait(self):
@@ -50,7 +82,9 @@ class Monitor:
          "reset": self.framing.reset}[action]()
 
     def discard_edit(self):
-        """Goes back to the framing the monitor showed before editing."""
+        """Goes back to the image and framing the monitor showed before editing."""
+        if self.image != self.applied_image:
+            self.use_image(self.applied_image)
         self.framing.restore(self.applied_framing)
 
     def copy_limits(self, other):
@@ -61,7 +95,7 @@ class Monitor:
         positions scale with the monitor size. Only the fill survives without
         those, because it is the same wherever it lands.
         """
-        if other.image != self.image:
+        if other.original != self.original:  # an upscaled copy is still the same picture
             return "different image"
         if self.width * other.height != other.width * self.height:
             return "different screen shape"
@@ -102,7 +136,7 @@ class Monitor:
                 os.remove(path)  # a half-written file
             raise
         daemon.set_image(self.name, path)
-        self.store.remember(self.name, path, self.image, self.framing)
+        self.store.remember(self.name, path, self.image, self.framing, self.original)
         self.store.remove_old_crops(self.name, keep=path)
         self.shown, self.ignored = path, None
         self.mark_applied()

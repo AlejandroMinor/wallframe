@@ -33,6 +33,11 @@ class Store:
             return saved["source"], saved
         return shown, None
 
+    def images_in_use(self):
+        """Every image the saved state still points at, so none is cleaned away."""
+        return {path for entry in self.load().values()
+                for path in (entry.get("source"), entry.get("original")) if path}
+
     def new_crop_path(self, monitor):
         """A new, unused path for the monitor's next crop.
 
@@ -49,10 +54,15 @@ class Store:
             if own.fullmatch(name) and path != keep:
                 os.remove(path)
 
-    def remember(self, monitor, crop, source, framing):
-        """Saves that `monitor` shows `crop`, made from `source` with `framing`."""
+    def remember(self, monitor, crop, source, framing, original=None):
+        """Saves that `monitor` shows `crop`, made from `source` with `framing`.
+
+        `original` is the picture `source` was upscaled from, when it was.
+        """
         state = self.load()
         state[monitor] = {"crop": crop, "source": source, **framing.to_dict()}
+        if original and original != source:
+            state[monitor]["original"] = original
         os.makedirs(self.directory, exist_ok=True)
         # Written aside, then swapped in: opening state.json for writing would
         # empty it first, and a failure halfway would lose every monitor's entry.

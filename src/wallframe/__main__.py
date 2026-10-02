@@ -2,7 +2,7 @@
 
 import sys
 
-from . import compositors, daemons, render, window
+from . import compositors, daemons, render, upscalers, window
 from .commands import notify
 from .monitor import Monitor
 from .state import Store
@@ -24,7 +24,7 @@ def main():
 
     wanted = sys.argv[1] if len(sys.argv) > 1 else info.focused
     start = next((i for i, m in enumerate(monitors) if m.name == wanted), 0)
-    return window.run(monitors, daemon, start, info.focused)
+    return window.run(monitors, daemon, start, info.focused, upscalers.detect())
 
 
 if __name__ == "__main__":
