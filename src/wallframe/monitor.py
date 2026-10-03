@@ -108,12 +108,54 @@ class Monitor:
             self.framing.fill_color = other.framing.fill_color
             self.framing.blur = other.framing.blur
             return
-        saved = other.framing.to_dict()
-        scale = self.width / other.width  # same shape, so one factor fits both axes
-        saved["x"], saved["y"] = saved["x"] * scale, saved["y"] * scale
-        backdrop = saved["backdrop"]
-        backdrop["x"], backdrop["y"] = backdrop["x"] * scale, backdrop["y"] * scale
-        self.framing.restore(saved)
+        self.framing.restore(other.framing.to_dict())  # it carries the other monitor's size
+
+    def open_image(self, path):
+        """Edits another picture, centered, keeping only the fill; Apply shows it.
+
+        Raises OSError, with a sentence as strerror, when it is not an image or
+        is animated: one cropped frame would freeze it.
+        """
+        try:
+            size = render.image_size(path)
+        except OSError as error:
+            raise OSError(None, "not an image wallframe can read") from error
+        if not render.is_still_image(path):
+            raise OSError(None, "animated images and videos cannot be framed")
+        framing = Framing(self.width, self.height, *size)
+        framing.fill, framing.fill_color, framing.blur = (
+            self.framing.fill, self.framing.fill_color, self.framing.blur)
+        thumb = render.thumbnail(path, PREVIEW_MAX)
+        self.image = self.original = path
+        self.upscaled = None
+        self.framing, self.thumb = framing, thumb
+
+    def snapshot(self):
+        """What a layout keeps of this monitor: the picture and how it is framed.
+
+        Not the crop: a crop is remade on each Apply and the old ones are deleted.
+        """
+        entry = {"source": self.image, **self.framing.to_dict()}
+        if self.original != self.image:
+            entry["original"] = self.original
+        return entry
+
+    def use_snapshot(self, entry):
+        """Edits what snapshot() saved, as it was, even from another monitor on this output.
+
+        Raises FileNotFoundError when the picture is gone.
+        """
+        source = entry["source"]
+        if not os.path.exists(source):
+            raise FileNotFoundError(2, "image not found", source)
+        # Read before changing anything, so a file that cannot be read changes nothing.
+        framing = Framing(self.width, self.height, *render.image_size(source))
+        framing.restore(entry)
+        thumb = render.thumbnail(source, PREVIEW_MAX)
+        original = entry.get("original")
+        self.original = original if original and os.path.exists(original) else source
+        self.upscaled = source if source != self.original else None
+        self.image, self.framing, self.thumb = source, framing, thumb
 
     def preview(self):
         """The thumbnail with the current mirror and rotation."""

@@ -15,10 +15,11 @@ from PIL import Image  # noqa: E402
 from wallframe import upscalers  # noqa: E402
 from wallframe.commands import Cancel  # noqa: E402
 from wallframe.daemons import Daemon, Output  # noqa: E402
+from wallframe.layouts import Layouts  # noqa: E402
 from wallframe.monitor import Monitor  # noqa: E402
 from wallframe.state import Store  # noqa: E402
 from wallframe.window import NUDGE, NUDGE_SHIFT, Window  # noqa: E402
-from gi.repository import Gdk  # noqa: E402
+from gi.repository import Gdk, Gtk  # noqa: E402
 
 NO_DAEMON = "wallframe-no-existe-este-programa"
 
@@ -76,9 +77,13 @@ class StandIn:
         self.copy_button = Widget()
         self.move_backdrop = Widget()
         self.grid_button = Widget()
+        self.layouts_button = Widget()
+        self.layouts = (Layouts(os.path.join(monitors[0].store.directory, "layouts"))
+                        if monitors else None)
+        self.positions = {}
         self.upscaler = None  # as without Upscayl installed
         self.upscaling = {}
-        self.flashed = []
+        self.flashed, self.reported = [], []
         self.closed = False
 
     def __getattr__(self, name):
@@ -88,8 +93,14 @@ class StandIn:
     def refresh(self):
         pass
 
+    def get_focus(self):
+        return None
+
     def flash(self, text, style):
         self.flashed.append((style, text))
+
+    def report(self, message, detail):
+        self.reported.append((message, detail))
 
     def close(self):
         self.closed = True
@@ -277,13 +288,129 @@ def test_the_upscale_panel_really_builds(tmp_path, monkeypatch):
         assert getattr(panel, name) is not None, name
 
 
+# --- Layouts: one click shows a saved set on the monitors and in the editor
+
+
+class RecordingDaemon:
+    def __init__(self):
+        self.shown = {}
+
+    def set_image(self, output, path):
+        self.shown[output] = path
+
+
+def test_a_layout_applies_at_once_and_comes_back_as_saved(tmp_path):
+    a, b = wallpaper(tmp_path, "a.png"), wallpaper(tmp_path, "b.png")
+    left = monitor_on(tmp_path, "DP-1", 90, 160, a)
+    right = monitor_on(tmp_path, "DP-2", 160, 90, a)
+    daemon = RecordingDaemon()
+    window = StandIn([left, right], daemon)
+    left.edit("mirror")
+    saved = window.layouts.save("Mirrored", window.monitors)
+    left.use_image(b)
+    left.edit("rotate")
+    Window.apply_touched(window)
+
+    Window.activate_layout(window, saved)
+    assert left.image == a and left.framing.flip_h and left.framing.rotation == 0
+    assert not left.touched                              # applied, not left pending
+    assert daemon.shown["DP-1"] == left.shown
+    assert "DP-2" not in daemon.shown                    # unchanged, so not rewritten
+    assert window.flashed[-1] == ("success", "Switched to Mirrored")
+
+
+def test_a_layout_with_a_missing_picture_still_applies_the_rest(tmp_path):
+    gone = wallpaper(tmp_path, "gone.png")
+    left = monitor_on(tmp_path, "DP-1", 90, 160, gone)
+    right = monitor_on(tmp_path, "DP-2", 90, 160, wallpaper(tmp_path, "b.png"))
+    window = StandIn([left, right], RecordingDaemon())
+    right.edit("mirror")
+    saved = window.layouts.save("Two", window.monitors)
+    os.remove(gone)
+    right.edit("mirror")
+
+    Window.activate_layout(window, saved)
+    assert right.framing.flip_h and window.daemon.shown.keys() == {"DP-2"}
+    assert left.image == gone and not left.touched       # left as it was
+    assert window.flashed[-1] == ("error", "Could not load all of Two")
+    assert window.reported == [("Could not load all of Two",
+                                f"DP-1: image not found\n{gone}\n\n"
+                                "The other monitors switched.")]
+
+
+def test_a_picture_that_is_not_an_image_changes_nothing(tmp_path):
+    picture = wallpaper(tmp_path, "a.png")
+    monitor = monitor_on(tmp_path, "DP-1", 90, 160, picture)
+    window = StandIn([monitor], UntouchableDaemon())
+    monitor.edit("mirror")
+    saved = window.layouts.save("Broken", [monitor])
+    monitor.edit("mirror")
+    with open(picture, "w") as f:
+        f.write("not an image any more")
+
+    Window.activate_layout(window, saved)
+    assert not monitor.framing.flip_h and not monitor.touched
+    message, detail = window.reported[0]
+    assert detail.startswith("DP-1: ") and picture in detail
+
+
+def test_a_layout_from_other_monitors_says_so(tmp_path):
+    window = StandIn([monitor_on(tmp_path, "DP-1", 90, 160, wallpaper(tmp_path))],
+                     UntouchableDaemon())
+    other = StandIn([monitor_on(tmp_path, "HDMI-A-1", 90, 160, wallpaper(tmp_path))])
+    saved = window.layouts.save("Elsewhere", other.monitors)
+    Window.activate_layout(window, saved)
+    assert window.flashed[-1] == ("warning", "Elsewhere has none of these monitors")
+
+
+def test_typing_a_layout_name_does_not_edit_the_image(tmp_path):
+    monitor = monitor_on(tmp_path, "DP-1", 90, 160, wallpaper(tmp_path))
+    window = StandIn([monitor])
+    window.get_focus = lambda: Gtk.Entry().get_delegate()
+    for name in ("h", "r", "Return", "Tab", "0"):
+        assert key(window, name) is False
+    assert not monitor.touched
+
+
+def test_the_layouts_panel_really_builds(tmp_path):
+    """With a real layout in it, so the cards and their menus are built too."""
+    monitor = monitor_on(tmp_path, "DP-1", 90, 160, wallpaper(tmp_path))
+    window = StandIn([monitor])
+    window.layouts.save("Desk", [monitor])
+    assert Window.build_layouts_popover(window) is not None
+    assert len(list(window.layout_list)) == 1 and not window.layout_empty.get_visible()
+
+
+# --- Open: another picture for a monitor, from the dialog or a dropped file
+
+
+def test_an_opened_image_waits_for_apply(tmp_path):
+    monitor = monitor_on(tmp_path, "DP-1", 90, 160, wallpaper(tmp_path))
+    window = StandIn([monitor], UntouchableDaemon())
+    other = wallpaper(tmp_path, "beach.png")
+    Window.open_image(window, monitor, other)
+    assert monitor.image == other and monitor.touched
+    assert window.flashed == [("accent", "beach.png on DP-1 · frame it, then Apply")]
+
+
+def test_a_file_that_is_not_an_image_says_so(tmp_path):
+    monitor = monitor_on(tmp_path, "DP-1", 90, 160, wallpaper(tmp_path))
+    window = StandIn([monitor])
+    notes = tmp_path / "notes.txt"
+    notes.write_text("hello")
+    Window.open_image(window, monitor, str(notes))
+    assert not monitor.touched
+    assert window.flashed == [("error",
+                               "Cannot open notes.txt: not an image wallframe can read")]
+
+
 # --- Keys: Ctrl and Alt belong to the desktop
 
 
 def test_control_and_alt_are_left_to_the_desktop(tmp_path):
     monitor = monitor_on(tmp_path, "DP-1", 90, 160, wallpaper(tmp_path))
     window = StandIn([monitor])
-    for name in ("d", "h", "v", "r", "b", "c", "g", "0", "plus", "minus",
+    for name in ("d", "h", "v", "r", "b", "c", "g", "o", "0", "plus", "minus",
                  "Left", "Right", "Tab", "Return"):
         for mask in (Gdk.ModifierType.CONTROL_MASK, Gdk.ModifierType.ALT_MASK):
             assert key(window, name, mask) is False, f"{name} with modifiers got through"

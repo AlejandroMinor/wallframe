@@ -52,3 +52,24 @@ def test_other_compositors_run_nothing(monkeypatch):
     monkeypatch.delenv("HYPRLAND_INSTANCE_SIGNATURE", raising=False)
     assert compositors.detect() == compositors.CompositorInfo()
     assert ran == []
+
+
+def test_positions_from_sway_rect():
+    info = parse_outputs([{"name": "DP-1", "rect": {"x": 1920, "y": 0, "width": 1080,
+                                                     "height": 1920}}])
+    assert info.positions == {"DP-1": (1920, 0, 1080, 1920)}
+
+
+def test_positions_from_hyprland_follow_scale_and_rotation():
+    """Hyprland gives the physical size before rotating; the desktop uses logical pixels."""
+    info = parse_outputs([
+        {"name": "DP-1", "x": 0, "y": 0, "width": 3840, "height": 2160, "scale": 2,
+         "transform": 0},
+        {"name": "DP-2", "x": 1920, "y": 0, "width": 1920, "height": 1080, "scale": 1,
+         "transform": 1},
+    ])
+    assert info.positions == {"DP-1": (0, 0, 1920, 1080), "DP-2": (1920, 0, 1080, 1920)}
+
+
+def test_no_position_without_the_fields():
+    assert parse_outputs(OUTPUTS).positions == {}

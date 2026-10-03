@@ -246,3 +246,53 @@ def test_an_upscaled_copy_is_still_the_same_picture_for_copying(tmp_path):
     upscaled = monitor_on(tmp_path, "DP-3", 1080, 1920, image)
     upscaled.use_upscaled(upscaled_copy(tmp_path))
     assert plain.copy_limits(upscaled) is None
+
+
+def test_open_another_image_starts_centered_and_keeps_the_fill(tmp_path):
+    monitor = portrait_monitor(tmp_path)
+    monitor.edit("mirror")
+    monitor.framing.fill, monitor.framing.blur = "color", 20
+    other = tmp_path / "other.png"
+    Image.new("RGB", (300, 300)).save(other)
+    monitor.open_image(str(other))
+    assert monitor.image == monitor.original == str(other) and monitor.upscaled is None
+    assert not monitor.framing.flip_h and monitor.framing.source_w == 300
+    assert (monitor.framing.fill, monitor.framing.blur) == ("color", 20)
+    assert monitor.touched                                   # waits for Apply
+    monitor.discard_edit()
+    assert monitor.image != str(other) and not monitor.touched
+
+
+def test_open_refuses_what_it_cannot_frame(tmp_path):
+    monitor = portrait_monitor(tmp_path)
+    text = tmp_path / "notes.png"
+    text.write_text("not an image")
+    animated = tmp_path / "moving.gif"
+    frames = [Image.new("RGB", (20, 20), color) for color in ("red", "blue")]
+    frames[0].save(animated, save_all=True, append_images=frames[1:])
+    for path, reason in ((text, "not an image wallframe can read"),
+                         (animated, "animated images and videos cannot be framed"),
+                         (tmp_path / "gone.png", "not an image wallframe can read")):
+        with pytest.raises(OSError) as refused:
+            monitor.open_image(str(path))
+        assert refused.value.strerror == reason
+    assert not monitor.touched                               # nothing changed
+
+
+def test_reopening_on_another_monitor_on_the_same_output_keeps_the_center(tmp_path):
+    """state.json was written for a portrait monitor; a landscape one is on DP-1 now."""
+    image = tmp_path / "wide.png"
+    Image.new("RGB", (4000, 2000)).save(image)
+    store = Store(tmp_path / "data")
+    portrait = Monitor(Output("DP-1", 1080, 1920, str(image)), store)
+    portrait.framing.zoom_at(2, 0, 0)
+    portrait.framing.move_to(-5000, -1200)
+    portrait.apply(FakeDaemon())
+
+    landscape = Monitor(Output("DP-1", 2560, 1440, portrait.shown), store)
+    assert landscape.image == str(image)
+
+    def center(f):
+        return (f.monitor_w / 2 - f.x) / f.zoom, (f.monitor_h / 2 - f.y) / f.zoom
+
+    assert center(landscape.framing) == pytest.approx(center(portrait.framing))

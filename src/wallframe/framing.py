@@ -166,8 +166,12 @@ class Framing:
                 round(self.relative_zoom, 4), round(self.x, 1), round(self.y, 1), fill)
 
     def to_dict(self):
-        """For state.json; zoom is relative so it survives a resolution change."""
-        saved = {"zoom": self.relative_zoom, "x": self.x, "y": self.y,
+        """For state.json; zoom is relative so it survives a resolution change.
+
+        The monitor size goes along, so restore() can tell it moved to another one.
+        """
+        saved = {"monitor": [self.monitor_w, self.monitor_h],
+                 "zoom": self.relative_zoom, "x": self.x, "y": self.y,
                  "flip_h": self.flip_h, "flip_v": self.flip_v, "rotation": self.rotation}
         if self.backdrop:
             backdrop = self.backdrop
@@ -177,25 +181,48 @@ class Framing:
         return saved
 
     def restore(self, saved):
-        """Loads a to_dict() result, clamped in case the monitor changed."""
+        """Loads a to_dict() result, even one saved on a monitor of another size or shape.
+
+        That happens when a layout or state.json meets another monitor on the same
+        output, and when copying between monitors. The image point that was at the
+        center of the monitor goes back to its center, at the same relative zoom.
+        """
         self.flip_h = saved.get("flip_h", False)
         self.flip_v = saved.get("flip_v", False)
         self.rotation = saved.get("rotation", 0)
         self.fill = saved.get("fill", "blur")
         self.fill_color = saved.get("fill_color", "#000000")
         self.blur = saved.get("blur", BLUR_DEFAULT)
-        self.zoom = self.min_zoom * saved["zoom"]
-        self.x, self.y = saved["x"], saved["y"]
-        self.clamp()
+        monitor = saved.get("monitor")  # missing from files saved before it was kept
+        self.place(saved, monitor)
         if self.backdrop:
             backdrop = self.backdrop
             backdrop.flip_h, backdrop.flip_v, backdrop.rotation = (
                 self.flip_h, self.flip_v, self.rotation)
             backdrop.recenter()
             if "backdrop" in saved:
-                backdrop.zoom = backdrop.min_zoom * saved["backdrop"]["zoom"]
-                backdrop.x, backdrop.y = saved["backdrop"]["x"], saved["backdrop"]["y"]
-                backdrop.clamp()
+                backdrop.place(saved["backdrop"], monitor)
+
+    def place(self, saved, monitor):
+        """Sets the zoom and position `saved` had on `monitor`, a (width, height) or None.
+
+        On a monitor of another size, the image point at its center is found as a
+        share of the image, so it also holds between copies of the picture at
+        different resolutions, like an upscaled one.
+        """
+        self.zoom = self.min_zoom * saved["zoom"]
+        self.clamp()  # the zoom first: the position depends on it
+        x, y = saved["x"], saved["y"]
+        if monitor and tuple(monitor) != (self.monitor_w, self.monitor_h):
+            old_w, old_h = monitor
+            # The image as drawn there; its size depends only on the picture's shape.
+            drawn = saved["zoom"] * max(old_w / self.image_w, old_h / self.image_h)
+            share_x = (old_w / 2 - x) / (drawn * self.image_w)
+            share_y = (old_h / 2 - y) / (drawn * self.image_h)
+            x = self.monitor_w / 2 - share_x * self.image_w * self.zoom
+            y = self.monitor_h / 2 - share_y * self.image_h * self.zoom
+        self.x, self.y = x, y
+        self.clamp()
 
 
 def _clamp_axis(position, monitor, image):
