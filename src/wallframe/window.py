@@ -64,6 +64,7 @@ label.accent { color: @accent_color; }
 label.success { color: @success_color; }
 label.warning { color: @warning_color; }
 label.error { color: @error_color; }
+button.active-layout { box-shadow: inset 0 0 0 2px @accent_color; }
 label.keycap {
   font-family: monospace;
   font-size: 0.9em;
@@ -156,6 +157,7 @@ class Window(Gtk.ApplicationWindow):
         self.asking = False   # set while wallpaper-change questions are on screen
         self.postponed = set()  # (monitor, image) questions closed with Esc
         self.flash_timer = None
+        self.applying = None  # what is being applied off the main thread, e.g. "Work"
 
         # Size against the monitor the window opens on; without knowing which,
         # the smallest one, so it fits wherever it lands.
@@ -168,7 +170,8 @@ class Window(Gtk.ApplicationWindow):
         self.area.set_draw_func(self.draw)
 
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        box.append(self.build_top_bar())
+        self.top_bar = self.build_top_bar()
+        box.append(self.top_bar)
         box.append(self.area)
         box.append(self.build_bottom_bar())
         self.set_child(box)
@@ -268,6 +271,8 @@ class Window(Gtk.ApplicationWindow):
         self.help_button.add_css_class("flat")
         bottom = Gtk.Box(spacing=8, margin_top=6, margin_bottom=6, margin_start=6, margin_end=12)
         bottom.append(self.help_button)
+        self.spinner = Gtk.Spinner(visible=False)  # while Apply or a layout works
+        bottom.append(self.spinner)
         bottom.append(self.label)
         bottom.append(self.fill_button)
         zoom_out = icon_button("zoom-out-symbolic", "Zoom out (-)",
@@ -401,9 +406,16 @@ class Window(Gtk.ApplicationWindow):
             content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
             content.append(picture)
             content.append(name)
+            active = self.shows_layout(layout)
+            if active:  # what the monitors show: the card says so, in the accent color
+                name.set_label(f"✓ {layout.name}")
+                name.add_css_class("accent")
             card = Gtk.Button(child=content, focusable=False,
-                              tooltip_text="Apply to the monitors now")
+                              tooltip_text="On the monitors now · click to apply it again"
+                              if active else "Apply to the monitors now")
             card.add_css_class("flat")
+            if active:
+                card.add_css_class("active-layout")
             card.connect("clicked", lambda _b, layout=layout: self.activate_layout(layout))
             menu = Gtk.MenuButton(icon_name="view-more-symbolic", focusable=False,
                                   tooltip_text="Rename, update, duplicate or delete",
@@ -476,27 +488,25 @@ class Window(Gtk.ApplicationWindow):
         loaded leaves its monitor as it was, and a dialog says why and where the
         picture was, since a path does not fit in the status bar.
         """
-        failed = []
-        for monitor in self.monitors:
-            entry = layout.monitors.get(monitor.name)
-            if not entry:
-                continue
-            try:
-                monitor.use_snapshot(entry)
-            except OSError as error:  # the picture is gone or unreadable: the rest still apply
-                reason = ("image not found" if isinstance(error, FileNotFoundError)
-                          else error.strerror or str(error))
-                failed.append(f"{monitor.name}: {reason}\n{entry['source']}")
-        touched = [m for m in self.monitors if m.name in layout.monitors and m.touched]
-        failed += self.apply_monitors(touched)
-        if failed:
-            self.flash(f"Could not load all of {layout.name}", "error")
-            self.report(f"Could not load all of {layout.name}",
-                        "\n\n".join(failed) + "\n\nThe other monitors switched.")
-        elif not any(m.name in layout.monitors for m in self.monitors):
+        jobs = [(m, layout.monitors[m.name]) for m in self.monitors if m.name in layout.monitors]
+        if not jobs:
             self.flash(f"{layout.name} has none of these monitors", "warning")
-        else:
-            self.flash(f"Switched to {layout.name}", "success")
+            return
+
+        def done(failed):
+            if failed:
+                self.flash(f"Could not load all of {layout.name}", "error")
+                self.report(f"Could not load all of {layout.name}",
+                            "\n\n".join(failed) + "\n\nThe other monitors switched.")
+            else:
+                self.flash(f"Switched to {layout.name}", "success")
+
+        self.apply_monitors(jobs, layout.name, done)
+
+    def shows_layout(self, layout):
+        """True when every monitor the layout knows shows what it saved, as applied."""
+        known = [m for m in self.monitors if m.name in layout.monitors]
+        return bool(known) and all(m.shows(layout.monitors[m.name]) for m in known)
 
     def report(self, message, detail):
         """An error with more to say than the status bar holds."""
@@ -716,7 +726,11 @@ class Window(Gtk.ApplicationWindow):
             "mirrored" if framing.flip_h else "",
             "flipped" if framing.flip_v else "",
             f"rotated {framing.rotation}°" if framing.rotation else ""]
-        if not self.flash_timer:  # a message on screen keeps the bar until it ends
+        if self.applying:  # until it is over, whatever else flashed
+            self.label.set_css_classes(["accent"])
+            self.label.set_markup(
+                f"<b>{GLib.markup_escape_text(f'Applying {self.applying}…')}</b>")
+        elif not self.flash_timer:  # a message on screen keeps the bar until it ends
             self.label.set_markup(f"<b>{GLib.markup_escape_text(monitor.name)}</b>   "
                                   + GLib.markup_escape_text("  ·  ".join(filter(None, details))))
         self.area.queue_draw()
@@ -886,7 +900,11 @@ class Window(Gtk.ApplicationWindow):
         """Back on the main thread with the upscaled copies, and what failed.
 
         Pictures finished before a cancel are kept: they took as long as any other.
+        Waits while something is applied, since that reads the monitors it changes.
         """
+        if self.applying:
+            GLib.timeout_add(200, self.upscaled, targets, results, errors, scale, cancelled)
+            return False
         for monitor in targets:
             self.upscaling.pop(monitor.name, None)
             if monitor.original in results:
@@ -1036,6 +1054,8 @@ class Window(Gtk.ApplicationWindow):
         if state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.ALT_MASK):
             # Left to the desktop: Ctrl+D would discard the framing and Ctrl+H mirror it.
             return False
+        if self.applying:
+            return True  # nothing edits the monitors while they are being applied
         key = Gdk.keyval_name(Gdk.keyval_to_lower(keyval))
         if isinstance(self.get_focus(), Gtk.Editable) and key != "Escape":
             return False  # typing a layout's name: H, R or Enter are letters, not actions
@@ -1076,7 +1096,7 @@ class Window(Gtk.ApplicationWindow):
         return True
 
     def on_active(self, _window, _prop):
-        if self.is_active() and not self.asking:
+        if self.is_active() and not self.asking and not self.applying:
             self.sync_with_daemon(ask_postponed=False)
 
     def apply(self):
@@ -1089,29 +1109,91 @@ class Window(Gtk.ApplicationWindow):
         if not touched:
             self.flash("Nothing to apply", "warning")
             return
-        failed = self.apply_monitors(touched)
-        if failed:
-            self.flash(f"Could not apply {'; '.join(failed)}", "error")
-        else:
-            self.flash("Applied", "success")
 
-    def apply_monitors(self, touched):
-        """Applies `touched` to the monitors; returns what failed, one line per monitor."""
-        failed = []
-        for monitor in touched:
-            try:
-                monitor.apply(self.daemon)
-            except OSError as error:  # the others still apply
-                reason = "image not found" if isinstance(error, FileNotFoundError) else (
-                    error.strerror or str(error))
-                failed.append(f"{monitor.name}: {reason}")
-        self.move_backdrop.set_active(False)  # back to moving the image
-        if self.upscaler:
-            in_use = {path for m in self.monitors for path in (m.image, m.upscaled) if path}
-            self.upscaler.clean(in_use | self.monitors[0].store.images_in_use()
-                                | self.layouts.images_in_use())
+        def done(failed):
+            if failed:
+                self.flash(f"Could not apply {'; '.join(failed)}", "error")
+            else:
+                self.flash("Applied", "success")
+
+        self.apply_monitors([(m, None) for m in touched], "the changes", done)
+
+    def apply_monitors(self, jobs, what, done):
+        """Applies each (monitor, layout entry, or None for its own edits) off the main thread.
+
+        Reading the pictures and cropping them takes a second or two per monitor,
+        so the window pauses with a spinner instead of freezing, and nothing edits
+        the monitors until it is over. done(failed) runs back on the main thread,
+        with one line per monitor that failed; a layout's picture that cannot be
+        read also gives the path where it was.
+        """
+        self.set_busy(what)
+
+        def work():
+            """The slow part, which reads the monitors and changes none of them."""
+            results = []  # (monitor, snapshot, crop path, error, picture that failed to load)
+            for monitor, entry in jobs:
+                try:
+                    snapshot = monitor.read_snapshot(entry) if entry else None
+                except OSError as error:  # gone or unreadable: the other monitors still apply
+                    results.append((monitor, None, None, error, entry["source"]))
+                    continue
+                image, framing = ((snapshot.source, snapshot.framing) if snapshot
+                                  else (monitor.image, monitor.framing))
+                if snapshot and not monitor.touched and (image, framing.key()) == (
+                        monitor.applied_image, monitor.applied):
+                    results.append((monitor, snapshot, None, None, None))  # shows it already
+                    continue
+                try:
+                    results.append((monitor, snapshot, monitor.make_crop(image, framing),
+                                    None, None))
+                except OSError as error:
+                    results.append((monitor, snapshot, None, error, None))
+            return results
+
+        def finish(results):
+            failed = []
+            for monitor, snapshot, path, error, picture in results:
+                if snapshot:
+                    monitor.take(snapshot)
+                try:
+                    if error:
+                        raise error
+                    if path:
+                        monitor.show(self.daemon, path)
+                except OSError as failure:
+                    reason = ("image not found" if isinstance(failure, FileNotFoundError)
+                              else failure.strerror or str(failure))
+                    failed.append(f"{monitor.name}: {reason}"
+                                  + (f"\n{picture}" if picture else ""))
+            self.set_busy(None)
+            self.move_backdrop.set_active(False)  # back to moving the image
+            if self.upscaler:
+                in_use = {p for m in self.monitors for p in (m.image, m.upscaled) if p}
+                self.upscaler.clean(in_use | self.monitors[0].store.images_in_use()
+                                    | self.layouts.images_in_use())
+            self.refresh()
+            self.fill_layouts()  # marks the card of what the monitors show now
+            done(failed)
+
+        self.in_background(work, finish)
+
+    def in_background(self, work, then):
+        """Runs work() on another thread, then then(its result) back on the main one."""
+        def run():
+            result = work()
+            GLib.idle_add(lambda: then(result) and False)  # False: run once
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def set_busy(self, what):
+        """Pauses the editor while `what` is applied, or resumes it with None."""
+        self.applying = what
+        self.top_bar.set_sensitive(not what)
+        self.area.set_sensitive(not what)
+        self.spinner.set_visible(bool(what))
+        self.spinner.set_spinning(bool(what))
         self.refresh()
-        return failed
 
     def sync_with_daemon(self, then=None, ask_postponed=True):
         """Reloads monitors whose wallpaper changed elsewhere; asks about edited ones.

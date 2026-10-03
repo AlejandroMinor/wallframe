@@ -1,9 +1,12 @@
 import os
+from collections import namedtuple
 
 from . import render
 from .framing import Framing
 
 PREVIEW_MAX = 2048  # longest side of the preview copy; the crop uses the original
+# A layout's entry for a monitor, read from disk and ready to edit.
+Snapshot = namedtuple("Snapshot", "source original framing thumb")
 
 
 class Monitor:
@@ -139,17 +142,46 @@ class Monitor:
 
         Raises FileNotFoundError when the picture is gone.
         """
+        self.take(self.read_snapshot(entry))
+
+    def read_snapshot(self, entry):
+        """What snapshot() saved, read from disk without changing the monitor.
+
+        It reads the whole picture for the thumbnail, so it can take a moment,
+        and changes nothing, so it can run off the main thread.
+        Raises FileNotFoundError when the picture is gone, OSError when unreadable.
+        """
         source = entry["source"]
         if not os.path.exists(source):
             raise FileNotFoundError(2, "image not found", source)
-        # Read before changing anything, so a file that cannot be read changes nothing.
-        framing = Framing(self.width, self.height, *render.image_size(source))
-        framing.restore(entry)
-        thumb = render.thumbnail(source, PREVIEW_MAX)
+        framing = self.saved_framing(entry)
         original = entry.get("original")
-        self.original = original if original and os.path.exists(original) else source
-        self.upscaled = source if source != self.original else None
-        self.image, self.framing, self.thumb = source, framing, thumb
+        original = original if original and os.path.exists(original) else source
+        return Snapshot(source, original, framing, render.thumbnail(source, PREVIEW_MAX))
+
+    def take(self, snapshot):
+        """Edits a read_snapshot() result."""
+        self.image, self.original = snapshot.source, snapshot.original
+        self.upscaled = snapshot.source if snapshot.source != snapshot.original else None
+        self.framing, self.thumb = snapshot.framing, snapshot.thumb
+
+    def saved_framing(self, entry):
+        """The framing snapshot() saved, on this monitor; reads only the image's header."""
+        framing = Framing(self.width, self.height, *render.image_size(entry["source"]))
+        framing.restore(entry)
+        return framing
+
+    def shows(self, entry):
+        """True when the monitor shows what snapshot() saved, as applied.
+
+        Quick enough to ask for every layout each time the list is drawn.
+        """
+        if entry["source"] != self.applied_image:
+            return False
+        try:
+            return self.saved_framing(entry).key() == self.applied
+        except OSError:
+            return False
 
     def preview(self):
         """The thumbnail with the current mirror and rotation."""
@@ -164,13 +196,26 @@ class Monitor:
         this edit still pending; the crop just written stays on disk unused, and
         the next apply clears it away.
         """
+        self.show(daemon, self.make_crop(self.image, self.framing))
+
+    def make_crop(self, image, framing):
+        """Writes the crop of `image` with `framing` to a new file and returns its path.
+
+        The slow half of apply(), and it changes nothing, so it can run off the
+        main thread. Raises OSError if the image is gone or the crop cannot be written.
+        """
         path = self.store.new_crop_path(self.name)
         try:
-            render.crop(self.image, self.framing, path)
+            render.crop(image, framing, path)
         except OSError:
             if os.path.exists(path):
                 os.remove(path)  # a half-written file
             raise
+        return path
+
+    def show(self, daemon, path):
+        """The quick half of apply(): sets `path`, a crop of what is edited now, and
+        remembers it. Raises OSError when the daemon refuses it."""
         daemon.set_image(self.name, path)
         self.store.remember(self.name, path, self.image, self.framing, self.original)
         self.store.remove_old_crops(self.name, keep=path)

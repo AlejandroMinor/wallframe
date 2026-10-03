@@ -84,6 +84,8 @@ class StandIn:
         self.upscaler = None  # as without Upscayl installed
         self.upscaling = {}
         self.flashed, self.reported = [], []
+        self.applying = None
+        self.busy = []  # every set_busy() call, to see the window paused and resumed
         self.closed = False
 
     def __getattr__(self, name):
@@ -95,6 +97,17 @@ class StandIn:
 
     def get_focus(self):
         return None
+
+    def in_background(self, work, then):
+        """At once: the tests check what happened right after the call."""
+        then(work())
+
+    def set_busy(self, what):
+        self.applying = what
+        self.busy.append(what)
+
+    def fill_layouts(self):
+        pass
 
     def flash(self, text, style):
         self.flashed.append((style, text))
@@ -374,6 +387,43 @@ def test_a_layout_from_other_monitors_says_so(tmp_path):
     assert window.flashed[-1] == ("warning", "Elsewhere has none of these monitors")
 
 
+def test_the_layout_on_the_monitors_is_the_one_marked(tmp_path):
+    a, b = wallpaper(tmp_path, "a.png"), wallpaper(tmp_path, "b.png")
+    left = monitor_on(tmp_path, "DP-1", 90, 160, a)
+    right = monitor_on(tmp_path, "DP-2", 160, 90, a)
+    window = StandIn([left, right], RecordingDaemon())
+    first = window.layouts.save("First", window.monitors)
+    left.open_image(b)
+    second = window.layouts.save("Second", window.monitors)
+    assert Window.shows_layout(window, first)          # applied is still First
+    assert not Window.shows_layout(window, second)     # Second is only in the editor
+
+    Window.activate_layout(window, second)
+    assert Window.shows_layout(window, second) and not Window.shows_layout(window, first)
+    left.edit("rotate")                                 # an edit not applied yet
+    assert Window.shows_layout(window, second)         # the monitors still show it
+    Window.apply_touched(window)
+    assert not Window.shows_layout(window, second)
+
+
+def test_the_window_pauses_while_it_applies(tmp_path):
+    monitor = monitor_on(tmp_path, "DP-1", 90, 160, wallpaper(tmp_path))
+    window = StandIn([monitor], RecordingDaemon())
+    saved = window.layouts.save("Desk", [monitor])
+    monitor.edit("mirror")
+    Window.activate_layout(window, saved)
+    assert window.busy == ["Desk", None]                # paused, then resumed
+
+
+def test_keys_do_nothing_while_it_applies(tmp_path):
+    monitor = monitor_on(tmp_path, "DP-1", 90, 160, wallpaper(tmp_path))
+    window = StandIn([monitor])
+    window.applying = "Desk"
+    for name in ("h", "r", "Return", "Escape"):
+        assert key(window, name) is True                # taken, and dropped
+    assert not monitor.touched and not window.closed
+
+
 def test_typing_a_layout_name_does_not_edit_the_image(tmp_path):
     monitor = monitor_on(tmp_path, "DP-1", 90, 160, wallpaper(tmp_path))
     window = StandIn([monitor])
@@ -388,8 +438,14 @@ def test_the_layouts_panel_really_builds(tmp_path):
     monitor = monitor_on(tmp_path, "DP-1", 90, 160, wallpaper(tmp_path))
     window = StandIn([monitor])
     window.layouts.save("Desk", [monitor])
+    monitor.edit("mirror")
+    window.layouts.save("Mirrored", [monitor])
+    monitor.edit("mirror")                              # the monitor shows Desk
     assert Window.build_layouts_popover(window) is not None
-    assert len(list(window.layout_list)) == 1 and not window.layout_empty.get_visible()
+    Window.fill_layouts(window)                         # the stand-in skips it elsewhere
+    cards = [child.get_child().get_child() for child in window.layout_list]
+    assert len(cards) == 2 and not window.layout_empty.get_visible()
+    assert [card.has_css_class("active-layout") for card in cards] == [True, False]
 
 
 # --- Open: another picture for a monitor, from the dialog or a dropped file

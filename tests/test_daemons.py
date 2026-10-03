@@ -26,11 +26,11 @@ def test_no_daemon_means_no_outputs():
     assert parse_query("error: could not connect to socket\n") == []
 
 
-def test_a_new_wallpaper_shows_at_once(monkeypatch):
-    """No fade: the monitor shows the framing as it looked in the editor, right away."""
+def test_a_new_wallpaper_fades_in_quickly(monkeypatch):
     ran = []
     monkeypatch.setattr(daemons, "run_or_fail", ran.append)
     Daemon("awww").set_image("DP-1", "/tmp/crop.png")
     (cmd,) = ran
-    assert cmd[cmd.index("--transition-type") + 1] == "none"
+    assert cmd[cmd.index("--transition-type") + 1] == "fade"
+    assert float(cmd[cmd.index("--transition-duration") + 1]) < 1   # soft, not slow
     assert cmd[-1] == "/tmp/crop.png"
