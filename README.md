@@ -14,6 +14,8 @@ Wallpaper daemons scale the image to fill the screen and cut off the parts that 
 
 ## Requirements
 
+A Wayland compositor that awww or swww runs on: Hyprland, sway, niri, river, Wayfire and the like, on any distribution. It is tested on Hyprland. GNOME and KDE Plasma do not work, because they draw their own wallpaper and awww cannot show one there.
+
 `gtk4` (4.10 or newer), `python-gobject`, `python-cairo`, `python-pillow`, and `awww` or `swww`. On Arch Linux:
 
 ```bash
