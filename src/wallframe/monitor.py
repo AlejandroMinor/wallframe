@@ -87,27 +87,21 @@ class Monitor:
             self.use_image(self.applied_image)
         self.framing.restore(self.applied_framing)
 
-    def copy_limits(self, other):
-        """Why `other`'s framing cannot be taken whole here, or None when it can.
+    def copy_from(self, other, everything=True):
+        """Takes `other`'s picture and framing, or with everything=False only its fill.
 
-        Taken whole it brings the mirror, the rotation, the zoom and the
-        position, which need the same image and a monitor of the same shape:
-        positions scale with the monitor size. Only the fill survives without
-        those, because it is the same wherever it lands.
+        The picture comes with its upscaled copy. On a monitor of another shape,
+        what was at the center of `other` lands at the center here.
         """
-        if other.original != self.original:  # an upscaled copy is still the same picture
-            return "different image"
-        if self.width * other.height != other.width * self.height:
-            return "different screen shape"
-        return None
-
-    def copy_from(self, other):
-        """Takes `other`'s framing whole, or just its fill when copy_limits blocks it."""
-        if self.copy_limits(other):
+        if not everything:
             self.framing.fill = other.framing.fill
             self.framing.fill_color = other.framing.fill_color
             self.framing.blur = other.framing.blur
             return
+        self.image, self.original, self.upscaled = other.image, other.original, other.upscaled
+        self.thumb = other.thumb  # never changed in place, so both can use it
+        self.framing = Framing(self.width, self.height,
+                               other.framing.source_w, other.framing.source_h)
         self.framing.restore(other.framing.to_dict())  # it carries the other monitor's size
 
     def open_image(self, path):

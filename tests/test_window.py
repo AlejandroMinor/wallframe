@@ -183,18 +183,29 @@ def test_copying_from_the_same_shape_says_it_copied_everything(tmp_path):
     assert (target.framing.flip_h, target.framing.rotation) == (True, 90)
 
 
-def test_copying_from_another_image_says_only_the_fill_came(tmp_path):
-    target = monitor_on(tmp_path, "DP-1", 90, 160, wallpaper(tmp_path, "a.png"))
-    other = monitor_on(tmp_path, "DP-2", 90, 160, wallpaper(tmp_path, "b.png"))
+def test_copying_the_fill_only_leaves_the_picture(tmp_path):
+    a, b = wallpaper(tmp_path, "a.png"), wallpaper(tmp_path, "b.png")
+    target = monitor_on(tmp_path, "DP-1", 90, 160, a)
+    other = monitor_on(tmp_path, "DP-2", 90, 160, b)
     other.framing.fill, other.framing.fill_color = "color", "#123456"
     target.framing.zoom_at(0.5, 0, 0)      # zoomed out, so the fill is on screen
     window = StandIn([target, other], index=0)
 
-    Window.copy_settings(window, other)
-    assert window.flashed[0][1] == "Copied the fill from DP-2 (different image)"
-    assert "everything" not in window.flashed[0][1]
+    Window.copy_settings(window, other, everything=False)
+    assert window.flashed[0][1] == "Copied the fill from DP-2"
     assert (target.framing.fill, target.framing.fill_color) == ("color", "#123456")
-    assert not target.framing.rotation                  # it did not bring the image over
+    assert target.image == a                            # it did not bring the picture over
+
+
+def test_copying_everything_brings_another_picture(tmp_path):
+    a, b = wallpaper(tmp_path, "a.png"), wallpaper(tmp_path, "b.png")
+    target = monitor_on(tmp_path, "DP-1", 90, 160, a)
+    other = monitor_on(tmp_path, "HDMI-A-1", 160, 90, b)  # another shape, too
+    window = StandIn([target, other], index=0)
+
+    Window.copy_settings(window, other)
+    assert target.image == b and target.touched
+    assert window.flashed[0][1] == "Copied everything from HDMI-A-1"
 
 
 def test_the_fill_message_also_says_it_only_shows_when_zoomed_out(tmp_path):
@@ -202,7 +213,7 @@ def test_the_fill_message_also_says_it_only_shows_when_zoomed_out(tmp_path):
     other = monitor_on(tmp_path, "DP-2", 90, 160, wallpaper(tmp_path, "b.png"))
     window = StandIn([target, other], index=0)          # the target still covers the monitor
 
-    Window.copy_settings(window, other)
+    Window.copy_settings(window, other, everything=False)
     assert window.flashed[0][1] == "Copied the fill from DP-2; it shows when zoomed out"
 
 

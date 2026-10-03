@@ -726,42 +726,51 @@ class Window(Gtk.ApplicationWindow):
         self.refresh()
 
     def fill_copy_menu(self, menu_button):
-        """One entry per other monitor, saying what copying from it would take."""
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        heading = Gtk.Label(xalign=0, margin_start=6, margin_bottom=4)
+        """One row per other monitor, with the picture it shows: copy all of it, or the fill."""
+        grid = Gtk.Grid(row_spacing=8, column_spacing=12)
+        heading = Gtk.Label(xalign=0, margin_bottom=2)
         heading.set_markup(f"<b>Copy to {GLib.markup_escape_text(self.monitor.name)} from</b>")
-        box.append(heading)
+        grid.attach(heading, 0, 0, 2, 1)
+        row = 1
         for source in self.monitors:
             if source is self.monitor:
                 continue
-            limits = self.monitor.copy_limits(source)
-            what = "everything" if limits is None else f"fill only ({limits})"
             name = Gtk.Label(xalign=0)
             name.set_markup(f"<b>{GLib.markup_escape_text(source.name)}</b>")
-            detail = Gtk.Label(label=what, xalign=0)
-            detail.add_css_class("dim-label")
-            content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-            content.append(name)
-            content.append(detail)
-            button = Gtk.Button(child=content, focusable=False)
-            button.add_css_class("flat")
-            button.connect("clicked", lambda _b, source=source: self.copy_settings(source))
-            box.append(button)
-        menu_button.get_popover().set_child(box)
+            same = source.original == self.monitor.original
+            picture = Gtk.Label(label="same picture" if same else os.path.basename(source.image),
+                                xalign=0, ellipsize=Pango.EllipsizeMode.MIDDLE,
+                                max_width_chars=24)
+            picture.add_css_class("dim-label")
+            about = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+            about.append(name)
+            about.append(picture)
+            choices = Gtk.Box(css_classes=["linked"], valign=Gtk.Align.CENTER)
+            for label, tip, everything in (
+                    ("Everything", "The picture, mirror, rotation, zoom, position and fill",
+                     True),
+                    ("Fill only", "Blur or color around a smaller image", False)):
+                button = Gtk.Button(label=label, tooltip_text=tip, focusable=False)
+                button.connect("clicked", lambda _b, source=source, everything=everything:
+                               self.copy_settings(source, everything))
+                choices.append(button)
+            grid.attach(about, 0, row, 1, 1)
+            grid.attach(choices, 1, row, 1, 1)
+            row += 1
+        menu_button.get_popover().set_child(grid)
 
-    def copy_settings(self, source):
+    def copy_settings(self, source, everything=True):
         self.copy_button.popdown()
         target = self.monitor
-        limits = target.copy_limits(source)
-        target.copy_from(source)
+        target.copy_from(source, everything)
         self.move_backdrop.set_active(False)
         self.refresh()
-        if limits is None:
+        if everything:
             self.flash(f"Copied everything from {source.name}", "accent")
         elif target.framing.covers:
             self.flash(f"Copied the fill from {source.name}; it shows when zoomed out", "accent")
         else:
-            self.flash(f"Copied the fill from {source.name} ({limits})", "accent")
+            self.flash(f"Copied the fill from {source.name}", "accent")
 
     def refresh_ai(self):
         """Syncs the AI panel with the current monitor."""
