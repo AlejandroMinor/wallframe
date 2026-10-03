@@ -1,6 +1,6 @@
 # wallframe
 
-Drag, zoom, mirror and rotate your wallpaper inside each monitor's frame. A GTK4 editor for awww and swww on Wayland.
+Drag, zoom, mirror and rotate your wallpaper inside each monitor's frame, and save layouts for all your monitors. A GTK4 editor for awww and swww on Wayland.
 
 Wallpaper daemons scale the image to fill the screen and cut off the parts that do not fit. They always keep the center. On a portrait monitor, a landscape image can lose more than half of its width, and often the part you wanted to see. wallframe shows the frame of each monitor over the image, so you can choose which part to keep.
 
@@ -14,7 +14,7 @@ Wallpaper daemons scale the image to fill the screen and cut off the parts that 
 
 ## Requirements
 
-`gtk4`, `python-gobject`, `python-cairo`, `python-pillow`, and `awww` or `swww`. On Arch Linux:
+`gtk4` (4.10 or newer), `python-gobject`, `python-cairo`, `python-pillow`, and `awww` or `swww`. On Arch Linux:
 
 ```bash
 sudo pacman -S gtk4 python-gobject python-cairo python-pillow awww
@@ -65,7 +65,7 @@ for_window [app_id="io.github.AlejandroMinor.wallframe"] floating enable
 
 ## Usage
 
-![wallframe editing a portrait monitor: the frame is bright, the rest of the image is dimmed](docs/interface.webp)
+![wallframe editing a monitor: the frame is bright, the rest of the image is dimmed](docs/interface.webp)
 
 | Action | Mouse / button | Key |
 |--------|----------------|-----|
@@ -87,11 +87,15 @@ for_window [app_id="io.github.AlejandroMinor.wallframe"] floating enable
 
 Zoom below 100% to see more of the image, or to make it smaller than the monitor. The empty space around it is filled with a copy of the image, blurred as much as you like, or with a color. Both are in the **Fill** panel of the bottom bar. Check **Move background** there (or press `B`) to drag and zoom that copy instead of the image.
 
+![A landscape picture zoomed out on a portrait monitor, with the empty space filled by a blurred copy](docs/fill.webp)
+
 A dot on a monitor button means that the monitor does not show your changes yet. Apply crops the image to the exact size of the monitor and sets it with awww (or swww) on that monitor only. The window stays open.
 
 wallframe saves the crops in `~/.local/share/wallframe/`. It does not use the cache folder, because the daemon loads the crops from there again at login. When you open wallframe again, each monitor starts from the original image with your last framing, so the image does not lose quality. Animated and video wallpapers are not supported.
 
 The **Layouts** panel saves what every monitor shows: the picture and its framing. Each layout has a preview of your monitors as they stand on the desk (on Hyprland and sway; elsewhere side by side). Click a layout to show it on the monitors at once; the one they show is marked. Its menu renames it, saves the current wallpapers into it, duplicates it or deletes it. Layouts point at your pictures: if one was moved or deleted, that monitor stays as it was and wallframe says why, with the path where the picture was.
+
+![The Layouts panel with two saved layouts, one of them marked as the one the monitors show](docs/layouts.webp)
 
 wallframe opens on the focused monitor. To start on a different monitor, give its output name: `wallframe DP-1`.
 
