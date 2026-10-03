@@ -1,6 +1,7 @@
 """Tests for reading `awww query` / `swww query`: parsing only, no daemon runs."""
 
-from wallframe.daemons import Output, parse_query
+from wallframe import daemons
+from wallframe.daemons import Daemon, Output, parse_query
 
 # Real output of `awww query` on a three-monitor setup, plus one output
 # showing a plain color, which has no image to frame.
@@ -23,3 +24,13 @@ def test_reads_every_output_showing_an_image():
 def test_no_daemon_means_no_outputs():
     assert parse_query("") == []
     assert parse_query("error: could not connect to socket\n") == []
+
+
+def test_a_new_wallpaper_fades_in_quickly(monkeypatch):
+    ran = []
+    monkeypatch.setattr(daemons, "run_or_fail", ran.append)
+    Daemon("awww").set_image("DP-1", "/tmp/crop.png")
+    (cmd,) = ran
+    assert cmd[cmd.index("--transition-type") + 1] == "fade"
+    assert float(cmd[cmd.index("--transition-duration") + 1]) < 1   # soft, not slow
+    assert cmd[-1] == "/tmp/crop.png"

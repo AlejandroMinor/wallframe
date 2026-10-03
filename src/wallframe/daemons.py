@@ -42,6 +42,7 @@ class Daemon:
         Raises OSError when the daemon refuses it, so the caller can keep the
         crop the output shows now.
         """
+        # A short fade: soft, without keeping the new framing waiting.
         run_or_fail([self.program, "img", "-o", output, "--resize", "no",
                      "--transition-type", "fade", "--transition-duration", "0.4", path])
 

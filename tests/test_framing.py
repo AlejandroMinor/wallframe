@@ -254,3 +254,52 @@ def test_backdrop_of_a_same_shape_image_needs_zoom_to_move():
     assert not f.backdrop.can_move
     f.backdrop.zoom_at(1.2, 1280, 720)
     assert f.backdrop.can_move
+
+
+def center_of(f):
+    """The image point at the monitor's center, as a share of the image."""
+    return ((f.monitor_w / 2 - f.x) / (f.zoom * f.image_w),
+            (f.monitor_h / 2 - f.y) / (f.zoom * f.image_h))
+
+
+@pytest.mark.parametrize("width, height", [(2560, 1440), (1080, 1080), (2160, 3840)])
+def test_another_monitor_shows_the_same_point_at_its_center(width, height):
+    """Another monitor on the same output: what was centered stays centered."""
+    portrait = Framing(1080, 1920, 4000, 2000)
+    portrait.zoom_at(2, 0, 0)
+    portrait.move_to(-5000, -1200)
+    other = Framing(width, height, 4000, 2000)
+    other.restore(portrait.to_dict())
+    assert other.relative_zoom == pytest.approx(portrait.relative_zoom)
+    assert center_of(other) == pytest.approx(center_of(portrait))
+
+
+def test_the_background_also_keeps_its_center_on_another_monitor():
+    f = Framing(1080, 1920, 4000, 2000)
+    f.zoom_at(0.5, 540, 960)                 # zoomed out: the blurred background shows
+    f.backdrop.zoom_at(3, 0, 0)
+    f.backdrop.move_to(-6000, -2000)
+    other = Framing(2560, 1440, 4000, 2000)
+    other.restore(f.to_dict())
+    assert center_of(other.backdrop) == pytest.approx(center_of(f.backdrop))
+
+
+def test_the_same_point_holds_on_a_larger_copy_of_the_picture():
+    """An upscaled copy is the same picture at another size; the share is the same."""
+    f = Framing(1080, 1920, 4000, 2000)
+    f.zoom_at(2, 0, 0)
+    f.move_to(-5000, -1200)
+    other = Framing(2560, 1440, 8000, 4000)
+    other.restore(f.to_dict())
+    assert center_of(other) == pytest.approx(center_of(f))
+
+
+def test_a_save_from_before_the_monitor_size_was_kept_still_loads():
+    f = Framing(1080, 1920, 4000, 2000)
+    f.zoom_at(2, 0, 0)
+    f.move_to(-500, -100)
+    saved = f.to_dict()
+    del saved["monitor"]
+    restored = Framing(1080, 1920, 4000, 2000)
+    restored.restore(saved)
+    assert restored.key() == f.key()

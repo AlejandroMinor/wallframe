@@ -75,9 +75,11 @@ for_window [app_id="io.github.AlejandroMinor.wallframe"] floating enable
 | Move the background instead of the image | Fill panel | `B` |
 | Mirror / flip / rotate 90° | Toolbar | `H` / `V` / `R` |
 | Reset to the original image, centered | Toolbar | `0` |
+| Open another image for this monitor | Toolbar, or drop a file on the canvas | `O` |
 | Discard changes since the last Apply | Toolbar | `D` |
 | Copy from another monitor: everything, or just the fill | Toolbar | |
 | Rule-of-thirds grid | Toolbar | `G` |
+| Save or switch layouts | Layouts button | |
 | Next monitor | Monitor buttons | `Tab` |
 | Apply to the marked monitors | Apply | `Enter` |
 | Show all keyboard shortcuts | Keyboard button, bottom left | `?` / `F1` |
@@ -88,6 +90,8 @@ Zoom below 100% to see more of the image, or to make it smaller than the monitor
 A dot on a monitor button means that the monitor does not show your changes yet. Apply crops the image to the exact size of the monitor and sets it with awww (or swww) on that monitor only. The window stays open.
 
 wallframe saves the crops in `~/.local/share/wallframe/`. It does not use the cache folder, because the daemon loads the crops from there again at login. When you open wallframe again, each monitor starts from the original image with your last framing, so the image does not lose quality. Animated and video wallpapers are not supported.
+
+The **Layouts** panel saves what every monitor shows: the picture and its framing. Each layout has a preview of your monitors as they stand on the desk (on Hyprland and sway; elsewhere side by side). Click a layout to show it on the monitors at once; the one they show is marked. Its menu renames it, saves the current wallpapers into it, duplicates it or deletes it. Layouts point at your pictures: if one was moved or deleted, that monitor stays as it was and wallframe says why, with the path where the picture was.
 
 wallframe opens on the focused monitor. To start on a different monitor, give its output name: `wallframe DP-1`.
 

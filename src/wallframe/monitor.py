@@ -1,9 +1,12 @@
 import os
+from collections import namedtuple
 
 from . import render
 from .framing import Framing
 
 PREVIEW_MAX = 2048  # longest side of the preview copy; the crop uses the original
+# A layout's entry for a monitor, read from disk and ready to edit.
+Snapshot = namedtuple("Snapshot", "source original framing thumb")
 
 
 class Monitor:
@@ -87,33 +90,98 @@ class Monitor:
             self.use_image(self.applied_image)
         self.framing.restore(self.applied_framing)
 
-    def copy_limits(self, other):
-        """Why `other`'s framing cannot be taken whole here, or None when it can.
+    def copy_from(self, other, everything=True):
+        """Takes `other`'s picture and framing, or with everything=False only its fill.
 
-        Taken whole it brings the mirror, the rotation, the zoom and the
-        position, which need the same image and a monitor of the same shape:
-        positions scale with the monitor size. Only the fill survives without
-        those, because it is the same wherever it lands.
+        The picture comes with its upscaled copy. On a monitor of another shape,
+        what was at the center of `other` lands at the center here.
         """
-        if other.original != self.original:  # an upscaled copy is still the same picture
-            return "different image"
-        if self.width * other.height != other.width * self.height:
-            return "different screen shape"
-        return None
-
-    def copy_from(self, other):
-        """Takes `other`'s framing whole, or just its fill when copy_limits blocks it."""
-        if self.copy_limits(other):
+        if not everything:
             self.framing.fill = other.framing.fill
             self.framing.fill_color = other.framing.fill_color
             self.framing.blur = other.framing.blur
             return
-        saved = other.framing.to_dict()
-        scale = self.width / other.width  # same shape, so one factor fits both axes
-        saved["x"], saved["y"] = saved["x"] * scale, saved["y"] * scale
-        backdrop = saved["backdrop"]
-        backdrop["x"], backdrop["y"] = backdrop["x"] * scale, backdrop["y"] * scale
-        self.framing.restore(saved)
+        self.image, self.original, self.upscaled = other.image, other.original, other.upscaled
+        self.thumb = other.thumb  # never changed in place, so both can use it
+        self.framing = Framing(self.width, self.height,
+                               other.framing.source_w, other.framing.source_h)
+        self.framing.restore(other.framing.to_dict())  # it carries the other monitor's size
+
+    def open_image(self, path):
+        """Edits another picture, centered, keeping only the fill; Apply shows it.
+
+        Raises OSError, with a sentence as strerror, when it is not an image or
+        is animated: one cropped frame would freeze it.
+        """
+        try:
+            size = render.image_size(path)
+        except OSError as error:
+            raise OSError(None, "not an image wallframe can read") from error
+        if not render.is_still_image(path):
+            raise OSError(None, "animated images and videos cannot be framed")
+        framing = Framing(self.width, self.height, *size)
+        framing.fill, framing.fill_color, framing.blur = (
+            self.framing.fill, self.framing.fill_color, self.framing.blur)
+        thumb = render.thumbnail(path, PREVIEW_MAX)
+        self.image = self.original = path
+        self.upscaled = None
+        self.framing, self.thumb = framing, thumb
+
+    def snapshot(self):
+        """What a layout keeps of this monitor: the picture and how it is framed.
+
+        Not the crop: a crop is remade on each Apply and the old ones are deleted.
+        """
+        entry = {"source": self.image, **self.framing.to_dict()}
+        if self.original != self.image:
+            entry["original"] = self.original
+        return entry
+
+    def use_snapshot(self, entry):
+        """Edits what snapshot() saved, as it was, even from another monitor on this output.
+
+        Raises FileNotFoundError when the picture is gone.
+        """
+        self.take(self.read_snapshot(entry))
+
+    def read_snapshot(self, entry):
+        """What snapshot() saved, read from disk without changing the monitor.
+
+        It reads the whole picture for the thumbnail, so it can take a moment,
+        and changes nothing, so it can run off the main thread.
+        Raises FileNotFoundError when the picture is gone, OSError when unreadable.
+        """
+        source = entry["source"]
+        if not os.path.exists(source):
+            raise FileNotFoundError(2, "image not found", source)
+        framing = self.saved_framing(entry)
+        original = entry.get("original")
+        original = original if original and os.path.exists(original) else source
+        return Snapshot(source, original, framing, render.thumbnail(source, PREVIEW_MAX))
+
+    def take(self, snapshot):
+        """Edits a read_snapshot() result."""
+        self.image, self.original = snapshot.source, snapshot.original
+        self.upscaled = snapshot.source if snapshot.source != snapshot.original else None
+        self.framing, self.thumb = snapshot.framing, snapshot.thumb
+
+    def saved_framing(self, entry):
+        """The framing snapshot() saved, on this monitor; reads only the image's header."""
+        framing = Framing(self.width, self.height, *render.image_size(entry["source"]))
+        framing.restore(entry)
+        return framing
+
+    def shows(self, entry):
+        """True when the monitor shows what snapshot() saved, as applied.
+
+        Quick enough to ask for every layout each time the list is drawn.
+        """
+        if entry["source"] != self.applied_image:
+            return False
+        try:
+            return self.saved_framing(entry).key() == self.applied
+        except OSError:
+            return False
 
     def preview(self):
         """The thumbnail with the current mirror and rotation."""
@@ -128,13 +196,26 @@ class Monitor:
         this edit still pending; the crop just written stays on disk unused, and
         the next apply clears it away.
         """
+        self.show(daemon, self.make_crop(self.image, self.framing))
+
+    def make_crop(self, image, framing):
+        """Writes the crop of `image` with `framing` to a new file and returns its path.
+
+        The slow half of apply(), and it changes nothing, so it can run off the
+        main thread. Raises OSError if the image is gone or the crop cannot be written.
+        """
         path = self.store.new_crop_path(self.name)
         try:
-            render.crop(self.image, self.framing, path)
+            render.crop(image, framing, path)
         except OSError:
             if os.path.exists(path):
                 os.remove(path)  # a half-written file
             raise
+        return path
+
+    def show(self, daemon, path):
+        """The quick half of apply(): sets `path`, a crop of what is edited now, and
+        remembers it. Raises OSError when the daemon refuses it."""
         daemon.set_image(self.name, path)
         self.store.remember(self.name, path, self.image, self.framing, self.original)
         self.store.remove_old_crops(self.name, keep=path)

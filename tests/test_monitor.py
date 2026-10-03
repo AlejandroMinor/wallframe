@@ -169,7 +169,6 @@ def test_copy_everything_between_same_shape_monitors(tmp_path):
     small.framing.zoom_at(0.6, 300, 900)
     small.framing.fill, small.framing.blur = "blur", 20
     small.framing.backdrop.zoom_at(2, 500, 500)
-    assert large.copy_limits(small) is None
     large.copy_from(small)
     for a, b in ((small.framing, large.framing), (small.framing.backdrop, large.framing.backdrop)):
         assert b.flip_h == a.flip_h
@@ -179,21 +178,43 @@ def test_copy_everything_between_same_shape_monitors(tmp_path):
     assert large.framing.blur == 20
 
 
-def test_copy_only_the_fill_from_another_image_or_shape(tmp_path):
+def test_copy_only_the_fill(tmp_path):
     first, second = tmp_path / "a.png", tmp_path / "b.png"
     Image.new("RGB", (4000, 2000)).save(first)
     Image.new("RGB", (4000, 2000)).save(second)
     source = monitor_on(tmp_path, "DP-1", 1080, 1920, first)
-    other_image = monitor_on(tmp_path, "DP-2", 1080, 1920, second)
-    other_shape = monitor_on(tmp_path, "DP-3", 2560, 1440, first)
+    target = monitor_on(tmp_path, "DP-2", 2560, 1440, second)
     source.framing.zoom_at(0.6, 0, 0)
     source.framing.fill, source.framing.fill_color = "color", "#123456"
-    cases = ((other_image, "different image"), (other_shape, "different screen shape"))
-    for target, reason in cases:
-        assert target.copy_limits(source) == reason
-        target.copy_from(source)
-        assert (target.framing.fill, target.framing.fill_color) == ("color", "#123456")
-        assert target.framing.relative_zoom == pytest.approx(1)    # position untouched
+    target.copy_from(source, everything=False)
+    assert (target.framing.fill, target.framing.fill_color) == ("color", "#123456")
+    assert target.image == str(second)                         # its own picture
+    assert target.framing.relative_zoom == pytest.approx(1)    # position untouched
+
+
+def test_copy_everything_brings_the_picture_to_a_monitor_of_another_shape(tmp_path):
+    """The same picture on every monitor: open it once, copy it to the others."""
+    first, second = tmp_path / "a.png", tmp_path / "b.png"
+    Image.new("RGB", (4000, 2000)).save(first)
+    Image.new("RGB", (3000, 3000)).save(second)
+    source = monitor_on(tmp_path, "DP-1", 1080, 1920, first)
+    target = monitor_on(tmp_path, "DP-2", 2560, 1440, second)
+    source.use_upscaled(upscaled_copy(tmp_path))
+    source.edit("mirror")
+    source.framing.zoom_at(2, 0, 0)
+    source.framing.move_to(-5000, -1200)
+    target.copy_from(source)
+    assert (target.image, target.original, target.upscaled) == (
+        source.image, source.original, source.upscaled)
+    assert target.framing.flip_h and target.touched
+
+    def center(f):
+        return ((f.monitor_w / 2 - f.x) / (f.zoom * f.image_w),
+                (f.monitor_h / 2 - f.y) / (f.zoom * f.image_h))
+
+    assert center(target.framing) == pytest.approx(center(source.framing))
+    target.discard_edit()
+    assert target.image == str(second) and not target.touched
 
 
 def test_a_larger_copy_keeps_the_framing_and_can_be_discarded(tmp_path):
@@ -239,10 +260,51 @@ def test_reopening_remembers_the_original_of_an_upscaled_copy(tmp_path):
     assert (again.image, again.original, again.upscaled) == (m.upscaled, original, m.upscaled)
 
 
-def test_an_upscaled_copy_is_still_the_same_picture_for_copying(tmp_path):
-    image = tmp_path / "wallpaper.png"
+def test_open_another_image_starts_centered_and_keeps_the_fill(tmp_path):
+    monitor = portrait_monitor(tmp_path)
+    monitor.edit("mirror")
+    monitor.framing.fill, monitor.framing.blur = "color", 20
+    other = tmp_path / "other.png"
+    Image.new("RGB", (300, 300)).save(other)
+    monitor.open_image(str(other))
+    assert monitor.image == monitor.original == str(other) and monitor.upscaled is None
+    assert not monitor.framing.flip_h and monitor.framing.source_w == 300
+    assert (monitor.framing.fill, monitor.framing.blur) == ("color", 20)
+    assert monitor.touched                                   # waits for Apply
+    monitor.discard_edit()
+    assert monitor.image != str(other) and not monitor.touched
+
+
+def test_open_refuses_what_it_cannot_frame(tmp_path):
+    monitor = portrait_monitor(tmp_path)
+    text = tmp_path / "notes.png"
+    text.write_text("not an image")
+    animated = tmp_path / "moving.gif"
+    frames = [Image.new("RGB", (20, 20), color) for color in ("red", "blue")]
+    frames[0].save(animated, save_all=True, append_images=frames[1:])
+    for path, reason in ((text, "not an image wallframe can read"),
+                         (animated, "animated images and videos cannot be framed"),
+                         (tmp_path / "gone.png", "not an image wallframe can read")):
+        with pytest.raises(OSError) as refused:
+            monitor.open_image(str(path))
+        assert refused.value.strerror == reason
+    assert not monitor.touched                               # nothing changed
+
+
+def test_reopening_on_another_monitor_on_the_same_output_keeps_the_center(tmp_path):
+    """state.json was written for a portrait monitor; a landscape one is on DP-1 now."""
+    image = tmp_path / "wide.png"
     Image.new("RGB", (4000, 2000)).save(image)
-    plain = monitor_on(tmp_path, "DP-1", 1080, 1920, image)
-    upscaled = monitor_on(tmp_path, "DP-3", 1080, 1920, image)
-    upscaled.use_upscaled(upscaled_copy(tmp_path))
-    assert plain.copy_limits(upscaled) is None
+    store = Store(tmp_path / "data")
+    portrait = Monitor(Output("DP-1", 1080, 1920, str(image)), store)
+    portrait.framing.zoom_at(2, 0, 0)
+    portrait.framing.move_to(-5000, -1200)
+    portrait.apply(FakeDaemon())
+
+    landscape = Monitor(Output("DP-1", 2560, 1440, portrait.shown), store)
+    assert landscape.image == str(image)
+
+    def center(f):
+        return (f.monitor_w / 2 - f.x) / f.zoom, (f.monitor_h / 2 - f.y) / f.zoom
+
+    assert center(landscape.framing) == pytest.approx(center(portrait.framing))

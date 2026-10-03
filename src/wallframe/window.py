@@ -7,10 +7,12 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 gi.require_version("Pango", "1.0")
-from gi.repository import Gdk, GLib, Gtk, Pango  # noqa: E402
+from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
 from . import render, upscalers  # noqa: E402
+from .commands import Cancel, Cancelled  # noqa: E402
 from .framing import BLUR_RANGE, FILLS, MAX_ZOOM  # noqa: E402
+from .layouts import Layouts  # noqa: E402
 
 APP_ID = "io.github.AlejandroMinor.wallframe"
 # wallframe's own icons, for what the icon theme has no symbol for.
@@ -25,31 +27,34 @@ ZOOM_KEYS = {"plus": ZOOM_STEP, "equal": ZOOM_STEP, "KP_Add": ZOOM_STEP,
 ARROW_KEYS = {"Left": (-1, 0), "Right": (1, 0), "Up": (0, -1), "Down": (0, 1)}
 HELP_KEYS = ("question", "F1")
 UPSCALE_TOOLTIP = "Enlarge a low-resolution image with AI (Upscayl)"
-# What the help panel lists: (section, [(keys, action)]).
+# What the help panel lists: (section, [(keys, action)]). Each key is drawn as a
+# key cap; the mouse gestures in MOUSE are plain text, so the two never look alike.
 SHORTCUTS = [
     ("Move and zoom", [
-        ("Drag  ·  Arrows", "Move (Shift: bigger steps)"),
-        ("Scroll  ·  +  −", "Zoom"),
-        ("C", "Center, keeping the zoom"),
+        (("Drag", "← ↑ ↓ →"), "Move (Shift: bigger steps)"),
+        (("Scroll", "+", "−"), "Zoom"),
+        (("C",), "Center, keeping the zoom"),
     ]),
     ("Image", [
-        ("H", "Mirror"),
-        ("V", "Flip upside down"),
-        ("R", "Rotate 90°"),
-        ("0", "Reset to the original image, centered"),
-        ("D", "Discard changes since the last Apply"),
+        (("H",), "Mirror"),
+        (("V",), "Flip upside down"),
+        (("R",), "Rotate 90°"),
+        (("0",), "Reset to the original image, centered"),
+        (("O",), "Open another image, or drop one on the canvas"),
+        (("D",), "Discard changes since the last Apply"),
     ]),
     ("Background (zoomed out, Blur fill)", [
-        ("B", "Move the background instead of the image"),
+        (("B",), "Move the background instead of the image"),
     ]),
     ("Window", [
-        ("Tab", "Next monitor"),
-        ("G", "Rule-of-thirds grid"),
-        ("Enter", "Apply to the marked monitors"),
-        ("?  ·  F1", "Show these shortcuts"),
-        ("Esc", "Close a panel, or the window"),
+        (("Tab",), "Next monitor"),
+        (("G",), "Rule-of-thirds grid"),
+        (("Enter",), "Apply to the marked monitors"),
+        (("?", "F1"), "Show these shortcuts"),
+        (("Esc",), "Close a panel, or the window"),
     ]),
 ]
+MOUSE = {"Drag", "Scroll"}
 NUDGE = 5            # monitor pixels per arrow key press
 NUDGE_SHIFT = 50     # with Shift held
 # GTK's own theme leaves these classes uncolored on labels; the named colors
@@ -59,15 +64,25 @@ label.accent { color: @accent_color; }
 label.success { color: @success_color; }
 label.warning { color: @warning_color; }
 label.error { color: @error_color; }
+button.active-layout { box-shadow: inset 0 0 0 2px @accent_color; }
+label.keycap {
+  font-family: monospace;
+  font-size: 0.9em;
+  padding: 1px 7px;
+  border-radius: 5px;
+  border: 1px solid alpha(currentColor, 0.25);
+  border-bottom-width: 2px;
+  background: alpha(currentColor, 0.08);
+}
 """
 
 
-def run(monitors, daemon, start, focused, upscaler=None):
+def run(monitors, daemon, start, focused, upscaler=None, layouts=None, positions=None):
     """Opens the editor on monitors[start] and returns the exit status."""
     app = Gtk.Application(application_id=APP_ID)
     app.connect("startup", lambda _app: add_style())
     app.connect("activate", lambda _app: Window(app, monitors, daemon, start, focused,
-                                                upscaler).present())
+                                                upscaler, layouts, positions).present())
     return app.run([])
 
 
@@ -126,11 +141,14 @@ def describe(monitor):
 
 
 class Window(Gtk.ApplicationWindow):
-    def __init__(self, app, monitors, daemon, start, focused, upscaler=None):
+    def __init__(self, app, monitors, daemon, start, focused, upscaler=None, layouts=None,
+                 positions=None):
         super().__init__(application=app, title="wallframe")
         self.monitors, self.daemon, self.index = monitors, daemon, start
+        self.layouts = layouts or Layouts()
+        self.positions = positions or {}  # monitor name -> place on the desktop, for previews
         self.upscaler = upscaler  # None when Upscayl is not installed
-        self.upscaling = set()    # names of the monitors being upscaled now
+        self.upscaling = {}       # monitor name -> the Cancel of its running upscale
         self.ai_step, self.ai_pictures = 0, 0  # picture being upscaled, of how many
         self.previews = {}    # monitor name -> (image, mirror and rotation, cairo surface)
         self.backgrounds = {}  # monitor name -> (image, transform and fill, cairo surface)
@@ -139,6 +157,7 @@ class Window(Gtk.ApplicationWindow):
         self.asking = False   # set while wallpaper-change questions are on screen
         self.postponed = set()  # (monitor, image) questions closed with Esc
         self.flash_timer = None
+        self.applying = None  # what is being applied off the main thread, e.g. "Work"
 
         # Size against the monitor the window opens on; without knowing which,
         # the smallest one, so it fits wherever it lands.
@@ -151,13 +170,16 @@ class Window(Gtk.ApplicationWindow):
         self.area.set_draw_func(self.draw)
 
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        box.append(self.build_top_bar())
+        self.top_bar = self.build_top_bar()
+        box.append(self.top_bar)
         box.append(self.area)
         box.append(self.build_bottom_bar())
         self.set_child(box)
         self.connect_input()
         # Coming back to the window is when a wallpaper changed elsewhere shows up.
         self.connect("notify::is-active", self.on_active)
+        # Upscayl is a separate program and would outlive the window, still on the GPU.
+        self.connect("close-request", lambda _w: self.cancel_upscales(self.upscaling))
         self.select(start)
 
     def build_top_bar(self):
@@ -184,6 +206,9 @@ class Window(Gtk.ApplicationWindow):
                                  propagate_natural_height=True, child=picker)
 
         tools = Gtk.Box(spacing=6)
+        tools.append(icon_button("document-open-symbolic",
+                                 "Open another image for this monitor (O), or drop one",
+                                 self.choose_image))
         for icon, tip, action in (
                 ("object-flip-horizontal-symbolic", "Mirror (H)", "mirror"),
                 ("object-flip-vertical-symbolic", "Flip upside down (V)", "flip"),
@@ -209,6 +234,11 @@ class Window(Gtk.ApplicationWindow):
                                        self.on_grid_button, toggle=True)
         self.grid_button.set_active(self.show_grid)
         tools.append(self.grid_button)
+        self.layouts_button = Gtk.MenuButton(icon_name="user-bookmarks-symbolic",
+                                             focusable=False, margin_start=6,
+                                             tooltip_text="Layouts: save and switch wallpapers",
+                                             popover=self.build_layouts_popover())
+        tools.append(self.layouts_button)
         self.apply_button = Gtk.Button(label="Apply", focusable=False, margin_start=6,
                                        tooltip_text="Apply the marked monitors (Enter)")
         self.apply_button.add_css_class("suggested-action")
@@ -241,6 +271,8 @@ class Window(Gtk.ApplicationWindow):
         self.help_button.add_css_class("flat")
         bottom = Gtk.Box(spacing=8, margin_top=6, margin_bottom=6, margin_start=6, margin_end=12)
         bottom.append(self.help_button)
+        self.spinner = Gtk.Spinner(visible=False)  # while Apply or a layout works
+        bottom.append(self.spinner)
         bottom.append(self.label)
         bottom.append(self.fill_button)
         zoom_out = icon_button("zoom-out-symbolic", "Zoom out (-)",
@@ -260,14 +292,18 @@ class Window(Gtk.ApplicationWindow):
         grid = Gtk.Grid(row_spacing=6, column_spacing=18)
         row = 0
         for section, entries in SHORTCUTS:
-            title = Gtk.Label(xalign=0, margin_top=0 if row == 0 else 8)
+            title = Gtk.Label(xalign=0, margin_top=0 if row == 0 else 14, margin_bottom=2)
             title.set_markup(f"<b>{GLib.markup_escape_text(section)}</b>")
+            title.add_css_class("dim-label")
             grid.attach(title, 0, row, 2, 1)
             row += 1
             for keys, action in entries:
-                key_label = Gtk.Label(label=keys, xalign=1)
-                key_label.add_css_class("monospace")
-                grid.attach(key_label, 0, row, 1, 1)
+                cell = Gtk.Box(spacing=4, halign=Gtk.Align.START)
+                for key in keys:
+                    label = Gtk.Label(label=key)
+                    label.add_css_class("dim-label" if key in MOUSE else "keycap")
+                    cell.append(label)
+                grid.attach(cell, 0, row, 1, 1)
                 grid.attach(Gtk.Label(label=action, xalign=0), 1, row, 1, 1)
                 row += 1
         return pinned_popover("Keyboard shortcuts", grid)
@@ -296,7 +332,7 @@ class Window(Gtk.ApplicationWindow):
         self.ai_all.connect("toggled", lambda _b: self.refresh_ai())
         self.ai_run = Gtk.Button(label="Upscale", focusable=False)
         self.ai_run.add_css_class("suggested-action")
-        self.ai_run.connect("clicked", lambda _b: self.upscale())
+        self.ai_run.connect("clicked", lambda _b: self.on_ai_run())
 
         # Which copy the monitor uses; switching back undoes the upscaling.
         self.ai_original = Gtk.ToggleButton(label="Original", focusable=False, hexpand=True)
@@ -329,6 +365,152 @@ class Window(Gtk.ApplicationWindow):
                 grid.attach(label, 0, row, 1, 1)
             grid.attach(control, 1, row, 1, 1)
         return pinned_popover("Upscale with AI", grid)
+
+    def build_layouts_popover(self):
+        """Save what the monitors show, and switch to a saved layout with one click."""
+        self.layout_name = Gtk.Entry(placeholder_text="Name", hexpand=True)
+        self.layout_name.connect("activate", lambda _e: self.save_layout())
+        save = Gtk.Button(label="Save current", focusable=False)
+        save.add_css_class("suggested-action")
+        save.connect("clicked", lambda _b: self.save_layout())
+        row = Gtk.Box(spacing=6)
+        row.append(self.layout_name)
+        row.append(save)
+        self.layout_list = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE,
+                                       max_children_per_line=2, min_children_per_line=1,
+                                       row_spacing=6, column_spacing=6, homogeneous=True)
+        self.layout_empty = Gtk.Label(label="No layouts yet. Saving one keeps the picture\n"
+                                            "and framing of every monitor.", xalign=0)
+        self.layout_empty.add_css_class("dim-label")
+        scroll = Gtk.ScrolledWindow(child=self.layout_list, max_content_height=460,
+                                    propagate_natural_height=True,
+                                    propagate_natural_width=True,
+                                    hscrollbar_policy=Gtk.PolicyType.NEVER)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        for widget in (row, self.layout_empty, scroll):
+            box.append(widget)
+        self.fill_layouts()
+        return pinned_popover("Layouts", box)
+
+    def fill_layouts(self):
+        """One card per layout: click it to apply, ⋯ to rename, update, copy or delete."""
+        self.layout_list.remove_all()
+        layouts = self.layouts.all()
+        self.layout_empty.set_visible(not layouts)
+        for layout in layouts:
+            picture = Gtk.Picture.new_for_filename(layout.preview)
+            picture.set_content_fit(Gtk.ContentFit.CONTAIN)
+            picture.set_size_request(170, 76)
+            name = Gtk.Label(label=layout.name, ellipsize=Pango.EllipsizeMode.END,
+                             max_width_chars=18)
+            content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            content.append(picture)
+            content.append(name)
+            active = self.shows_layout(layout)
+            if active:  # what the monitors show: the card says so, in the accent color
+                name.set_label(f"✓ {layout.name}")
+                name.add_css_class("accent")
+            card = Gtk.Button(child=content, focusable=False,
+                              tooltip_text="On the monitors now · click to apply it again"
+                              if active else "Apply to the monitors now")
+            card.add_css_class("flat")
+            if active:
+                card.add_css_class("active-layout")
+            card.connect("clicked", lambda _b, layout=layout: self.activate_layout(layout))
+            menu = Gtk.MenuButton(icon_name="view-more-symbolic", focusable=False,
+                                  tooltip_text="Rename, update, duplicate or delete",
+                                  halign=Gtk.Align.END, valign=Gtk.Align.START,
+                                  popover=self.build_layout_menu(layout))
+            menu.add_css_class("flat")
+            overlay = Gtk.Overlay(child=card)
+            overlay.add_overlay(menu)
+            self.layout_list.append(overlay)
+
+    def build_layout_menu(self, layout):
+        """The ⋯ menu of one layout; its name is edited in place, Enter renames."""
+        rename = Gtk.Entry(text=layout.name)
+        rename.connect("activate",
+                       lambda entry: self.layout_action(self.layouts.rename, layout,
+                                                        entry.get_text().strip() or layout.name))
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        box.append(rename)
+        for label, action in (
+                ("Save current here", lambda: self.layout_action(
+                    self.layouts.update, layout, self.monitors, self.positions)),
+                ("Duplicate", lambda: self.layout_action(self.layouts.duplicate, layout)),
+                ("Delete…", lambda: self.confirm_delete_layout(layout))):
+            button = Gtk.Button(label=label, focusable=False)
+            button.get_child().set_xalign(0)
+            button.add_css_class("flat")
+            button.connect("clicked", lambda _b, action=action: action())
+            box.append(button)
+        return Gtk.Popover(child=box)
+
+    def layout_action(self, action, layout, *args):
+        """Runs a change on the layouts folder, then lists them again."""
+        try:
+            action(layout, *args)
+        except OSError as error:
+            self.flash(f"Could not change {layout.name}: {error.strerror or error}", "error")
+        self.fill_layouts()
+
+    def confirm_delete_layout(self, layout):
+        dialog = Gtk.AlertDialog(message=f"Delete {layout.name}?",
+                                 detail="The pictures stay where they are.",
+                                 buttons=["Cancel", "Delete"], cancel_button=0)
+
+        def answered(dialog, result):
+            try:
+                if dialog.choose_finish(result) == 1:
+                    self.layout_action(self.layouts.delete, layout)
+            except GLib.Error:  # closed with Esc
+                pass
+
+        dialog.choose(self, None, answered)
+
+    def save_layout(self):
+        name = self.layout_name.get_text().strip() or f"Layout {len(self.layouts.all()) + 1}"
+        try:
+            self.layouts.save(name, self.monitors, self.positions)
+        except OSError as error:
+            self.flash(f"Could not save the layout: {error.strerror or error}", "error")
+            return
+        self.layout_name.set_text("")
+        self.set_focus(None)  # the keys go back to the editor
+        self.fill_layouts()
+        self.flash(f"Saved {name}", "success")
+
+    def activate_layout(self, layout):
+        """Shows the layout on the monitors right away, and in the editor.
+
+        Monitors it does not know keep what they show; edits waiting for Apply on
+        the monitors it does know are replaced by it. A picture that cannot be
+        loaded leaves its monitor as it was, and a dialog says why and where the
+        picture was, since a path does not fit in the status bar.
+        """
+        jobs = [(m, layout.monitors[m.name]) for m in self.monitors if m.name in layout.monitors]
+        if not jobs:
+            self.flash(f"{layout.name} has none of these monitors", "warning")
+            return
+
+        def done(failed):
+            if failed:
+                self.flash(f"Could not load all of {layout.name}", "error")
+                self.report(f"Could not load all of {layout.name}",
+                            "\n\n".join(failed) + "\n\nThe other monitors switched.")
+            else:
+                self.flash(f"Switched to {layout.name}", "success")
+
+        self.apply_monitors(jobs, layout.name, done)
+
+    def shows_layout(self, layout):
+        """True when every monitor the layout knows shows what it saved, as applied."""
+        known = [m for m in self.monitors if m.name in layout.monitors]
+        return bool(known) and all(m.shows(layout.monitors[m.name]) for m in known)
+
+    def report(self, message, detail):
+        """An error with more to say than the status bar holds."""
+        Gtk.AlertDialog(message=message, detail=detail).show(self)
 
     def build_fill_popover(self):
         """Fill kind, blur strength, background moving and color, in one panel."""
@@ -382,6 +564,10 @@ class Window(Gtk.ApplicationWindow):
         keys = Gtk.EventControllerKey(propagation_phase=Gtk.PropagationPhase.CAPTURE)
         keys.connect("key-pressed", self.on_key)
         self.add_controller(keys)
+
+        drop = Gtk.DropTarget.new(Gdk.FileList, Gdk.DragAction.COPY)
+        drop.connect("drop", self.on_drop)
+        self.area.add_controller(drop)
 
     @property
     def monitor(self):
@@ -540,7 +726,11 @@ class Window(Gtk.ApplicationWindow):
             "mirrored" if framing.flip_h else "",
             "flipped" if framing.flip_v else "",
             f"rotated {framing.rotation}°" if framing.rotation else ""]
-        if not self.flash_timer:  # a message on screen keeps the bar until it ends
+        if self.applying:  # until it is over, whatever else flashed
+            self.label.set_css_classes(["accent"])
+            self.label.set_markup(
+                f"<b>{GLib.markup_escape_text(f'Applying {self.applying}…')}</b>")
+        elif not self.flash_timer:  # a message on screen keeps the bar until it ends
             self.label.set_markup(f"<b>{GLib.markup_escape_text(monitor.name)}</b>   "
                                   + GLib.markup_escape_text("  ·  ".join(filter(None, details))))
         self.area.queue_draw()
@@ -550,42 +740,51 @@ class Window(Gtk.ApplicationWindow):
         self.refresh()
 
     def fill_copy_menu(self, menu_button):
-        """One entry per other monitor, saying what copying from it would take."""
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        heading = Gtk.Label(xalign=0, margin_start=6, margin_bottom=4)
+        """One row per other monitor, with the picture it shows: copy all of it, or the fill."""
+        grid = Gtk.Grid(row_spacing=8, column_spacing=12)
+        heading = Gtk.Label(xalign=0, margin_bottom=2)
         heading.set_markup(f"<b>Copy to {GLib.markup_escape_text(self.monitor.name)} from</b>")
-        box.append(heading)
+        grid.attach(heading, 0, 0, 2, 1)
+        row = 1
         for source in self.monitors:
             if source is self.monitor:
                 continue
-            limits = self.monitor.copy_limits(source)
-            what = "everything" if limits is None else f"fill only ({limits})"
             name = Gtk.Label(xalign=0)
             name.set_markup(f"<b>{GLib.markup_escape_text(source.name)}</b>")
-            detail = Gtk.Label(label=what, xalign=0)
-            detail.add_css_class("dim-label")
-            content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-            content.append(name)
-            content.append(detail)
-            button = Gtk.Button(child=content, focusable=False)
-            button.add_css_class("flat")
-            button.connect("clicked", lambda _b, source=source: self.copy_settings(source))
-            box.append(button)
-        menu_button.get_popover().set_child(box)
+            same = source.original == self.monitor.original
+            picture = Gtk.Label(label="same picture" if same else os.path.basename(source.image),
+                                xalign=0, ellipsize=Pango.EllipsizeMode.MIDDLE,
+                                max_width_chars=24)
+            picture.add_css_class("dim-label")
+            about = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+            about.append(name)
+            about.append(picture)
+            choices = Gtk.Box(css_classes=["linked"], valign=Gtk.Align.CENTER)
+            for label, tip, everything in (
+                    ("Everything", "The picture, mirror, rotation, zoom, position and fill",
+                     True),
+                    ("Fill only", "Blur or color around a smaller image", False)):
+                button = Gtk.Button(label=label, tooltip_text=tip, focusable=False)
+                button.connect("clicked", lambda _b, source=source, everything=everything:
+                               self.copy_settings(source, everything))
+                choices.append(button)
+            grid.attach(about, 0, row, 1, 1)
+            grid.attach(choices, 1, row, 1, 1)
+            row += 1
+        menu_button.get_popover().set_child(grid)
 
-    def copy_settings(self, source):
+    def copy_settings(self, source, everything=True):
         self.copy_button.popdown()
         target = self.monitor
-        limits = target.copy_limits(source)
-        target.copy_from(source)
+        target.copy_from(source, everything)
         self.move_backdrop.set_active(False)
         self.refresh()
-        if limits is None:
+        if everything:
             self.flash(f"Copied everything from {source.name}", "accent")
         elif target.framing.covers:
             self.flash(f"Copied the fill from {source.name}; it shows when zoomed out", "accent")
         else:
-            self.flash(f"Copied the fill from {source.name} ({limits})", "accent")
+            self.flash(f"Copied the fill from {source.name}", "accent")
 
     def refresh_ai(self):
         """Syncs the AI panel with the current monitor."""
@@ -598,8 +797,9 @@ class Window(Gtk.ApplicationWindow):
                                      else "wallframe-upscale-symbolic")
         self.ai_button.set_tooltip_text("Upscaling…" if busy else UPSCALE_TOOLTIP)
         running = any(m.name in self.upscaling for m in self.upscale_targets())
-        self.ai_run.set_sensitive(not running)
-        self.ai_run.set_label("Upscaling…" if running else "Upscale")
+        # While it runs, the same button stops it.
+        self.ai_run.set_label("Cancel" if running else "Upscale")
+        self.ai_run.set_css_classes(["destructive-action" if running else "suggested-action"])
         self.ai_progress.set_visible(running)
         pictures = len({m.original for m in self.monitors})
         self.ai_all.set_label("All monitors · same picture, upscaled once" if pictures == 1
@@ -635,6 +835,23 @@ class Window(Gtk.ApplicationWindow):
         self.ai_progress.set_text(f"{done:.0f}%")
         return False  # run once
 
+    def on_ai_run(self):
+        """Upscale, or cancel the upscale that is running for these monitors."""
+        targets = [m.name for m in self.upscale_targets() if m.name in self.upscaling]
+        if targets:
+            self.cancel_upscales(targets)
+        else:
+            self.upscale()
+
+    def cancel_upscales(self, names):
+        """Stops the upscales running for these monitors; the rest keep going.
+
+        Monitors that share a run stop together: it is one Upscayl for all of them.
+        """
+        for cancel in {self.upscaling[name] for name in names}:
+            cancel()
+        return False  # let the window close
+
     def upscale_targets(self):
         """The monitors an Upscale click covers: this one, or all of them."""
         return self.monitors if self.ai_all.get_active() else [self.monitor]
@@ -652,7 +869,8 @@ class Window(Gtk.ApplicationWindow):
         model = self.upscaler.models[self.ai_model.get_selected()][0]
         scale = upscalers.SCALES[self.ai_scale.get_selected()]
         originals = list(dict.fromkeys(m.original for m in targets))  # distinct, in order
-        self.upscaling.update(m.name for m in targets)
+        cancel = Cancel()
+        self.upscaling.update((m.name, cancel) for m in targets)
         self.ai_step_started(1, len(originals))
         self.refresh()
         names = ", ".join(m.name for m in targets)
@@ -668,20 +886,33 @@ class Window(Gtk.ApplicationWindow):
             for step, original in enumerate(originals, start=1):
                 GLib.idle_add(self.ai_step_started, step, len(originals))
                 try:
-                    results[original] = self.upscaler.upscale(original, model, scale, report)
+                    results[original] = self.upscaler.upscale(original, model, scale, report,
+                                                              cancel)
                 except OSError as failure:
                     errors[original] = failure
-            GLib.idle_add(self.upscaled, targets, results, errors, scale)
+                except Cancelled:
+                    break
+            GLib.idle_add(self.upscaled, targets, results, errors, scale, cancel.requested)
 
         threading.Thread(target=work, daemon=True).start()
 
-    def upscaled(self, targets, results, errors, scale):
-        """Back on the main thread with the upscaled copies, and what failed."""
+    def upscaled(self, targets, results, errors, scale, cancelled=False):
+        """Back on the main thread with the upscaled copies, and what failed.
+
+        Pictures finished before a cancel are kept: they took as long as any other.
+        Waits while something is applied, since that reads the monitors it changes.
+        """
+        if self.applying:
+            GLib.timeout_add(200, self.upscaled, targets, results, errors, scale, cancelled)
+            return False
         for monitor in targets:
-            self.upscaling.discard(monitor.name)
+            self.upscaling.pop(monitor.name, None)
             if monitor.original in results:
                 monitor.use_upscaled(results[monitor.original])
         self.refresh()
+        if cancelled:
+            self.flash("Upscale cancelled", "warning")
+            return False
         failed = [m.name for m in targets if m.original in errors]
         if failed:
             error = next(iter(errors.values()))
@@ -712,6 +943,48 @@ class Window(Gtk.ApplicationWindow):
             self.move_backdrop.set_active(False)
             self.refresh()
             self.flash(f"Changes to {self.monitor.name} discarded", "accent")
+
+    def choose_image(self):
+        """Asks for a picture, starting in the folder of the one shown now."""
+        images = Gtk.FileFilter(name="Images")
+        images.add_mime_type("image/*")
+        filters = Gio.ListStore.new(Gtk.FileFilter)
+        filters.append(images)
+        dialog = Gtk.FileDialog(title=f"Open an image for {self.monitor.name}",
+                                filters=filters, default_filter=images, modal=False,
+                                initial_folder=Gio.File.new_for_path(
+                                    os.path.dirname(self.monitor.original)))
+        monitor = self.monitor  # the one it was opened for, even if Tab moves on
+
+        def chosen(dialog, result):
+            try:
+                path = dialog.open_finish(result).get_path()
+            except GLib.Error:  # cancelled
+                return
+            self.open_image(monitor, path)
+
+        dialog.open(self, None, chosen)
+
+    def on_drop(self, _target, files, _x, _y):
+        paths = [f.get_path() for f in files.get_files() if f.get_path()]
+        if not paths:
+            return False
+        self.open_image(self.monitor, paths[0])
+        return True
+
+    def open_image(self, monitor, path):
+        """Puts `path` on `monitor` in the editor, marked for Apply."""
+        try:
+            monitor.open_image(path)
+        except OSError as error:
+            self.flash(f"Cannot open {os.path.basename(path)}: {error.strerror or error}",
+                       "error")
+            return
+        if monitor is self.monitor:
+            self.move_backdrop.set_active(False)
+        self.refresh()
+        self.flash(f"{os.path.basename(path)} on {monitor.name} · frame it, then Apply",
+                   "accent")
 
     def on_grid_button(self):
         self.show_grid = self.grid_button.get_active()
@@ -781,9 +1054,13 @@ class Window(Gtk.ApplicationWindow):
         if state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.ALT_MASK):
             # Left to the desktop: Ctrl+D would discard the framing and Ctrl+H mirror it.
             return False
+        if self.applying:
+            return True  # nothing edits the monitors while they are being applied
         key = Gdk.keyval_name(Gdk.keyval_to_lower(keyval))
-        open_panel = next((b for b in (self.fill_button, self.help_button) if b.get_active()),
-                          None)
+        if isinstance(self.get_focus(), Gtk.Editable) and key != "Escape":
+            return False  # typing a layout's name: H, R or Enter are letters, not actions
+        open_panel = next((b for b in (self.fill_button, self.help_button, self.layouts_button)
+                           if b.get_active()), None)
         if key == "Escape" and open_panel:
             open_panel.popdown()  # Esc closes the panel, not the whole window
         elif key in HELP_KEYS:
@@ -798,6 +1075,8 @@ class Window(Gtk.ApplicationWindow):
             self.edit(KEY_ACTIONS[key])
         elif key == DISCARD_KEY:
             self.discard()
+        elif key == "o":
+            self.choose_image()
         elif key == "g":
             self.grid_button.set_active(not self.grid_button.get_active())
         elif key == "b":
@@ -817,7 +1096,7 @@ class Window(Gtk.ApplicationWindow):
         return True
 
     def on_active(self, _window, _prop):
-        if self.is_active() and not self.asking:
+        if self.is_active() and not self.asking and not self.applying:
             self.sync_with_daemon(ask_postponed=False)
 
     def apply(self):
@@ -830,23 +1109,91 @@ class Window(Gtk.ApplicationWindow):
         if not touched:
             self.flash("Nothing to apply", "warning")
             return
-        failed = []
-        for monitor in touched:
-            try:
-                monitor.apply(self.daemon)
-            except OSError as error:  # the others still apply
-                reason = "image not found" if isinstance(error, FileNotFoundError) else (
-                    error.strerror or str(error))
-                failed.append(f"{monitor.name}: {reason}")
-        self.move_backdrop.set_active(False)  # back to moving the image
-        if self.upscaler:
-            in_use = {path for m in self.monitors for path in (m.image, m.upscaled) if path}
-            self.upscaler.clean(in_use | self.monitors[0].store.images_in_use())
+
+        def done(failed):
+            if failed:
+                self.flash(f"Could not apply {'; '.join(failed)}", "error")
+            else:
+                self.flash("Applied", "success")
+
+        self.apply_monitors([(m, None) for m in touched], "the changes", done)
+
+    def apply_monitors(self, jobs, what, done):
+        """Applies each (monitor, layout entry, or None for its own edits) off the main thread.
+
+        Reading the pictures and cropping them takes a second or two per monitor,
+        so the window pauses with a spinner instead of freezing, and nothing edits
+        the monitors until it is over. done(failed) runs back on the main thread,
+        with one line per monitor that failed; a layout's picture that cannot be
+        read also gives the path where it was.
+        """
+        self.set_busy(what)
+
+        def work():
+            """The slow part, which reads the monitors and changes none of them."""
+            results = []  # (monitor, snapshot, crop path, error, picture that failed to load)
+            for monitor, entry in jobs:
+                try:
+                    snapshot = monitor.read_snapshot(entry) if entry else None
+                except OSError as error:  # gone or unreadable: the other monitors still apply
+                    results.append((monitor, None, None, error, entry["source"]))
+                    continue
+                image, framing = ((snapshot.source, snapshot.framing) if snapshot
+                                  else (monitor.image, monitor.framing))
+                if snapshot and not monitor.touched and (image, framing.key()) == (
+                        monitor.applied_image, monitor.applied):
+                    results.append((monitor, snapshot, None, None, None))  # shows it already
+                    continue
+                try:
+                    results.append((monitor, snapshot, monitor.make_crop(image, framing),
+                                    None, None))
+                except OSError as error:
+                    results.append((monitor, snapshot, None, error, None))
+            return results
+
+        def finish(results):
+            failed = []
+            for monitor, snapshot, path, error, picture in results:
+                if snapshot:
+                    monitor.take(snapshot)
+                try:
+                    if error:
+                        raise error
+                    if path:
+                        monitor.show(self.daemon, path)
+                except OSError as failure:
+                    reason = ("image not found" if isinstance(failure, FileNotFoundError)
+                              else failure.strerror or str(failure))
+                    failed.append(f"{monitor.name}: {reason}"
+                                  + (f"\n{picture}" if picture else ""))
+            self.set_busy(None)
+            self.move_backdrop.set_active(False)  # back to moving the image
+            if self.upscaler:
+                in_use = {p for m in self.monitors for p in (m.image, m.upscaled) if p}
+                self.upscaler.clean(in_use | self.monitors[0].store.images_in_use()
+                                    | self.layouts.images_in_use())
+            self.refresh()
+            self.fill_layouts()  # marks the card of what the monitors show now
+            done(failed)
+
+        self.in_background(work, finish)
+
+    def in_background(self, work, then):
+        """Runs work() on another thread, then then(its result) back on the main one."""
+        def run():
+            result = work()
+            GLib.idle_add(lambda: then(result) and False)  # False: run once
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def set_busy(self, what):
+        """Pauses the editor while `what` is applied, or resumes it with None."""
+        self.applying = what
+        self.top_bar.set_sensitive(not what)
+        self.area.set_sensitive(not what)
+        self.spinner.set_visible(bool(what))
+        self.spinner.set_spinning(bool(what))
         self.refresh()
-        if failed:
-            self.flash(f"Could not apply {'; '.join(failed)}", "error")
-        else:
-            self.flash("Applied", "success")
 
     def sync_with_daemon(self, then=None, ask_postponed=True):
         """Reloads monitors whose wallpaper changed elsewhere; asks about edited ones.

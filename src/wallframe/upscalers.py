@@ -3,7 +3,7 @@ import os
 import re
 import shutil
 
-from .commands import run_reporting
+from .commands import Cancelled, run_reporting
 from .state import DATA_DIR
 
 # Upscayl's command-line engine, where its packages put it: the AUR package
@@ -45,10 +45,11 @@ class Upscaler:
         """True for an image this upscaler made, so it is never upscaled again."""
         return os.path.dirname(os.path.abspath(path)) == os.path.abspath(self.directory)
 
-    def upscale(self, source, model, scale, report=None):
+    def upscale(self, source, model, scale, report=None, cancel=None):
         """Returns `source` enlarged `scale` times with `model`, made once and then reused.
 
         `report` gets each line of Upscayl's output as it arrives, for a progress bar.
+        Calling `cancel`, a commands.Cancel, stops Upscayl and raises Cancelled.
 
         Raises OSError when Upscayl fails, e.g. with no Vulkan GPU.
         """
@@ -62,9 +63,9 @@ class Upscaler:
         partial = path[:-len(".png")] + ".part.png"  # the extension picks the format
         try:
             run_reporting([self.program, "-i", source, "-o", partial, "-m", self.models_dir,
-                           "-n", model, "-s", str(scale)], report)
+                           "-n", model, "-s", str(scale)], report, cancel=cancel)
             os.replace(partial, path)
-        except OSError:
+        except (OSError, Cancelled):
             if os.path.exists(partial):
                 os.remove(partial)
             raise

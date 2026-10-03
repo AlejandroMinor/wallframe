@@ -6,6 +6,7 @@ import pytest
 from PIL import Image
 
 from wallframe import upscalers
+from wallframe.commands import Cancelled
 from wallframe.upscalers import Upscaler
 
 MODEL = "upscayl-standard-4x"
@@ -16,7 +17,7 @@ def fake_upscayl(monkeypatch):
     """Stands in for upscayl-ncnn: writes the enlarged image, and counts its runs."""
     runs = []
 
-    def run_reporting(cmd, report=None):
+    def run_reporting(cmd, report=None, cancel=None):
         runs.append(cmd)
         source, output, scale = cmd[cmd.index("-i") + 1], cmd[cmd.index("-o") + 1], cmd[-1]
         if report:
@@ -69,13 +70,25 @@ def test_an_edited_image_is_upscaled_again(tmp_path, fake_upscayl):
 
 
 def test_a_failed_upscale_leaves_nothing_behind(tmp_path, monkeypatch):
-    def fails(cmd, report=None):
+    def fails(cmd, report=None, cancel=None):
         open(cmd[cmd.index("-o") + 1], "wb").close()         # a half-written output
         raise OSError(None, "upscayl-ncnn failed: vkCreateInstance failed")
 
     monkeypatch.setattr(upscalers, "run_reporting", fails)
     up = upscaler(tmp_path)
     with pytest.raises(OSError):
+        up.upscale(picture(tmp_path), MODEL, 2)
+    assert os.listdir(tmp_path / "upscaled") == []
+
+
+def test_a_cancelled_upscale_leaves_nothing_behind(tmp_path, monkeypatch):
+    def cancelled(cmd, report=None, cancel=None):
+        open(cmd[cmd.index("-o") + 1], "wb").close()         # Upscayl stopped halfway
+        raise Cancelled
+
+    monkeypatch.setattr(upscalers, "run_reporting", cancelled)
+    up = upscaler(tmp_path)
+    with pytest.raises(Cancelled):
         up.upscale(picture(tmp_path), MODEL, 2)
     assert os.listdir(tmp_path / "upscaled") == []
 
