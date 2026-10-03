@@ -103,7 +103,8 @@ def speaker(lines, returncode=0):
     def popen(cmd, **kwargs):
         popen.cmd = cmd
         popen.kwargs = kwargs
-        return MagicMock(stdout=io.StringIO("".join(lines)), wait=lambda: returncode)
+        popen.process = MagicMock(stdout=io.StringIO("".join(lines)), wait=lambda: returncode)
+        return popen.process
     return popen
 
 
@@ -154,3 +155,29 @@ def test_a_program_that_never_starts_does_not_look_like_a_missing_file(monkeypat
         commands.run_reporting(["upscayl-ncnn"])
     assert not isinstance(failed.value, FileNotFoundError)
     assert failed.value.strerror == "upscayl-ncnn could not be started: No such file or directory"
+
+
+def test_cancelling_terminates_the_program_and_says_so(monkeypatch):
+    popen = speaker(["0.00%\n", "4.17%\n"], returncode=-15)   # killed by SIGTERM
+    monkeypatch.setattr(commands.subprocess, "Popen", popen)
+    cancel = commands.Cancel()
+    with pytest.raises(commands.Cancelled):
+        commands.run_reporting(["upscayl-ncnn"], lambda line: cancel(), cancel)
+    popen.process.terminate.assert_called()
+
+
+def test_a_cancel_before_the_start_starts_nothing(monkeypatch):
+    popen = speaker([])
+    monkeypatch.setattr(commands.subprocess, "Popen", popen)
+    cancel = commands.Cancel()
+    cancel()
+    with pytest.raises(commands.Cancelled):
+        commands.run_reporting(["upscayl-ncnn"], cancel=cancel)
+    assert not hasattr(popen, "cmd")
+
+
+def test_a_cancel_that_comes_too_late_keeps_the_result(monkeypatch):
+    """The program had already finished: its output is good, and nothing failed."""
+    monkeypatch.setattr(commands.subprocess, "Popen", speaker(["done\n"]))
+    cancel = commands.Cancel()
+    assert commands.run_reporting(["upscayl-ncnn"], lambda line: cancel(), cancel) == "done\n"

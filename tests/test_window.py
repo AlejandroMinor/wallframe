@@ -13,6 +13,7 @@ pytest.importorskip("gi")  # only the window needs GTK
 from PIL import Image  # noqa: E402
 
 from wallframe import upscalers  # noqa: E402
+from wallframe.commands import Cancel  # noqa: E402
 from wallframe.daemons import Daemon, Output  # noqa: E402
 from wallframe.monitor import Monitor  # noqa: E402
 from wallframe.state import Store  # noqa: E402
@@ -76,7 +77,7 @@ class StandIn:
         self.move_backdrop = Widget()
         self.grid_button = Widget()
         self.upscaler = None  # as without Upscayl installed
-        self.upscaling = set()
+        self.upscaling = {}
         self.flashed = []
         self.closed = False
 
@@ -218,6 +219,38 @@ def test_the_bar_starts_over_and_then_follows_the_percentage(tmp_path):
     assert (window.ai_progress.shown, window.ai_progress.text) == (0.0, "2 / 3")
     Window.ai_step_advanced(window, 62.5)
     assert (window.ai_progress.shown, window.ai_progress.text) == (0.625, "62%")
+
+
+def test_cancel_stops_only_the_upscale_of_these_monitors(tmp_path):
+    """Monitors sharing a run stop together; another monitor's run keeps going."""
+    window = StandIn([monitor_on(tmp_path, "DP-1", 90, 160, wallpaper(tmp_path)),
+                      monitor_on(tmp_path, "DP-2", 90, 160, wallpaper(tmp_path)),
+                      monitor_on(tmp_path, "DP-3", 90, 160, wallpaper(tmp_path))])
+    shared, other = Cancel(), Cancel()
+    window.upscaling = {"DP-1": shared, "DP-2": shared, "DP-3": other}
+    window.ai_all = Widget(active=False)
+    Window.on_ai_run(window)                            # the Upscale button, now Cancel
+    assert shared.requested and not other.requested
+
+
+def test_closing_the_window_stops_every_upscale(tmp_path):
+    window = StandIn([monitor_on(tmp_path, "DP-1", 90, 160, wallpaper(tmp_path))])
+    first, second = Cancel(), Cancel()
+    window.upscaling = {"DP-1": first, "DP-2": second}
+    assert Window.cancel_upscales(window, window.upscaling) is False   # still closes
+    assert first.requested and second.requested
+
+
+def test_a_cancelled_upscale_keeps_the_pictures_already_done(tmp_path):
+    a = monitor_on(tmp_path, "DP-1", 90, 160, wallpaper(tmp_path, "a.png"))
+    b = monitor_on(tmp_path, "DP-2", 90, 160, wallpaper(tmp_path, "b.png"))
+    window = StandIn([a, b])
+    window.upscaling = {"DP-1": Cancel(), "DP-2": Cancel()}
+    done = wallpaper(tmp_path, "a-upscaled.png", size=(800, 400))
+    Window.upscaled(window, [a, b], {a.original: done}, {}, 2, cancelled=True)
+    assert window.upscaling == {}
+    assert a.image == done and b.image == b.original
+    assert window.flashed == [("warning", "Upscale cancelled")]
 
 
 def test_the_upscale_panel_really_builds(tmp_path, monkeypatch):

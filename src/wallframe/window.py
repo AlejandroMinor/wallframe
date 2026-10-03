@@ -10,6 +10,7 @@ gi.require_version("Pango", "1.0")
 from gi.repository import Gdk, GLib, Gtk, Pango  # noqa: E402
 
 from . import render, upscalers  # noqa: E402
+from .commands import Cancel, Cancelled  # noqa: E402
 from .framing import BLUR_RANGE, FILLS, MAX_ZOOM  # noqa: E402
 
 APP_ID = "io.github.AlejandroMinor.wallframe"
@@ -130,7 +131,7 @@ class Window(Gtk.ApplicationWindow):
         super().__init__(application=app, title="wallframe")
         self.monitors, self.daemon, self.index = monitors, daemon, start
         self.upscaler = upscaler  # None when Upscayl is not installed
-        self.upscaling = set()    # names of the monitors being upscaled now
+        self.upscaling = {}       # monitor name -> the Cancel of its running upscale
         self.ai_step, self.ai_pictures = 0, 0  # picture being upscaled, of how many
         self.previews = {}    # monitor name -> (image, mirror and rotation, cairo surface)
         self.backgrounds = {}  # monitor name -> (image, transform and fill, cairo surface)
@@ -158,6 +159,8 @@ class Window(Gtk.ApplicationWindow):
         self.connect_input()
         # Coming back to the window is when a wallpaper changed elsewhere shows up.
         self.connect("notify::is-active", self.on_active)
+        # Upscayl is a separate program and would outlive the window, still on the GPU.
+        self.connect("close-request", lambda _w: self.cancel_upscales(self.upscaling))
         self.select(start)
 
     def build_top_bar(self):
@@ -296,7 +299,7 @@ class Window(Gtk.ApplicationWindow):
         self.ai_all.connect("toggled", lambda _b: self.refresh_ai())
         self.ai_run = Gtk.Button(label="Upscale", focusable=False)
         self.ai_run.add_css_class("suggested-action")
-        self.ai_run.connect("clicked", lambda _b: self.upscale())
+        self.ai_run.connect("clicked", lambda _b: self.on_ai_run())
 
         # Which copy the monitor uses; switching back undoes the upscaling.
         self.ai_original = Gtk.ToggleButton(label="Original", focusable=False, hexpand=True)
@@ -598,8 +601,9 @@ class Window(Gtk.ApplicationWindow):
                                      else "wallframe-upscale-symbolic")
         self.ai_button.set_tooltip_text("Upscaling…" if busy else UPSCALE_TOOLTIP)
         running = any(m.name in self.upscaling for m in self.upscale_targets())
-        self.ai_run.set_sensitive(not running)
-        self.ai_run.set_label("Upscaling…" if running else "Upscale")
+        # While it runs, the same button stops it.
+        self.ai_run.set_label("Cancel" if running else "Upscale")
+        self.ai_run.set_css_classes(["destructive-action" if running else "suggested-action"])
         self.ai_progress.set_visible(running)
         pictures = len({m.original for m in self.monitors})
         self.ai_all.set_label("All monitors · same picture, upscaled once" if pictures == 1
@@ -635,6 +639,23 @@ class Window(Gtk.ApplicationWindow):
         self.ai_progress.set_text(f"{done:.0f}%")
         return False  # run once
 
+    def on_ai_run(self):
+        """Upscale, or cancel the upscale that is running for these monitors."""
+        targets = [m.name for m in self.upscale_targets() if m.name in self.upscaling]
+        if targets:
+            self.cancel_upscales(targets)
+        else:
+            self.upscale()
+
+    def cancel_upscales(self, names):
+        """Stops the upscales running for these monitors; the rest keep going.
+
+        Monitors that share a run stop together: it is one Upscayl for all of them.
+        """
+        for cancel in {self.upscaling[name] for name in names}:
+            cancel()
+        return False  # let the window close
+
     def upscale_targets(self):
         """The monitors an Upscale click covers: this one, or all of them."""
         return self.monitors if self.ai_all.get_active() else [self.monitor]
@@ -652,7 +673,8 @@ class Window(Gtk.ApplicationWindow):
         model = self.upscaler.models[self.ai_model.get_selected()][0]
         scale = upscalers.SCALES[self.ai_scale.get_selected()]
         originals = list(dict.fromkeys(m.original for m in targets))  # distinct, in order
-        self.upscaling.update(m.name for m in targets)
+        cancel = Cancel()
+        self.upscaling.update((m.name, cancel) for m in targets)
         self.ai_step_started(1, len(originals))
         self.refresh()
         names = ", ".join(m.name for m in targets)
@@ -668,20 +690,29 @@ class Window(Gtk.ApplicationWindow):
             for step, original in enumerate(originals, start=1):
                 GLib.idle_add(self.ai_step_started, step, len(originals))
                 try:
-                    results[original] = self.upscaler.upscale(original, model, scale, report)
+                    results[original] = self.upscaler.upscale(original, model, scale, report,
+                                                              cancel)
                 except OSError as failure:
                     errors[original] = failure
-            GLib.idle_add(self.upscaled, targets, results, errors, scale)
+                except Cancelled:
+                    break
+            GLib.idle_add(self.upscaled, targets, results, errors, scale, cancel.requested)
 
         threading.Thread(target=work, daemon=True).start()
 
-    def upscaled(self, targets, results, errors, scale):
-        """Back on the main thread with the upscaled copies, and what failed."""
+    def upscaled(self, targets, results, errors, scale, cancelled=False):
+        """Back on the main thread with the upscaled copies, and what failed.
+
+        Pictures finished before a cancel are kept: they took as long as any other.
+        """
         for monitor in targets:
-            self.upscaling.discard(monitor.name)
+            self.upscaling.pop(monitor.name, None)
             if monitor.original in results:
                 monitor.use_upscaled(results[monitor.original])
         self.refresh()
+        if cancelled:
+            self.flash("Upscale cancelled", "warning")
+            return False
         failed = [m.name for m in targets if m.original in errors]
         if failed:
             error = next(iter(errors.values()))

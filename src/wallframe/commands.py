@@ -3,6 +3,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 
 
 def run(cmd):
@@ -64,18 +65,54 @@ def _clean(line):
     return line.strip('"')
 
 
-def run_reporting(cmd, report=None):
+class Cancelled(Exception):
+    """A job stopped on request. Not an OSError: nothing failed, so nothing is reported."""
+
+
+class Cancel:
+    """Stops a run_reporting job from another thread; call it to stop.
+
+    The job blocks reading the program's output, so a flag alone would only be
+    seen once the program ends: calling this also terminates the program.
+    """
+
+    def __init__(self):
+        self.requested = False
+        self._process = None
+        self._lock = threading.Lock()
+
+    def __call__(self):
+        with self._lock:
+            self.requested = True
+            if self._process:
+                self._process.terminate()
+
+    def watch(self, process):
+        """The program to terminate; terminated at once if the stop came first."""
+        with self._lock:
+            self._process = process
+            if self.requested:
+                process.terminate()
+
+
+def run_reporting(cmd, report=None, cancel=None):
     """Like run_or_fail, but hands each output line to `report` while the program runs.
 
     capture_output=True holds everything back until the program ends, which is fine
     for a query and useless for a long job. Upscayl writes to stderr, so it is
     folded into stdout: one reader for both, and no pipe left to fill up.
+
+    Calling `cancel`, a Cancel, terminates the program and raises Cancelled here.
     """
+    if cancel and cancel.requested:
+        raise Cancelled
     try:
         done = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 text=True, bufsize=1)
     except OSError as error:
         raise OSError(None, f"{cmd[0]} could not be started: {error.strerror}") from error
+    if cancel:
+        cancel.watch(done)
     lines = []
     for line in done.stdout:
         lines.append(line)
@@ -83,6 +120,8 @@ def run_reporting(cmd, report=None):
             report(line)
     done.stdout.close()
     code = done.wait()
+    if code and cancel and cancel.requested:  # killed by the stop, not a failure
+        raise Cancelled
     if code:
         reason = _last_line(lines) or f"exit {code}"
         raise OSError(None, f"{cmd[0]} failed: {reason}")
