@@ -1,5 +1,7 @@
 """Tests for the compositor answers: parsing only, no hyprctl or swaymsg runs."""
 
+import json
+
 import pytest
 
 from wallframe import compositors
@@ -36,22 +38,23 @@ def test_display_model(make, model, expected):
     assert display_model({"make": make, "model": model}) == expected
 
 
-def test_asks_only_the_running_compositor(monkeypatch):
+def test_sway_is_asked_with_its_own_command(monkeypatch):
     ran = []
-    monkeypatch.setattr(compositors, "run", lambda cmd: ran.append(cmd) or "[]")
-    monkeypatch.setenv("SWAYSOCK", "/run/user/1000/sway-ipc.sock")
-    monkeypatch.delenv("HYPRLAND_INSTANCE_SIGNATURE", raising=False)
-    compositors.detect()
+    monkeypatch.setattr(compositors, "run", lambda cmd: ran.append(cmd) or json.dumps(OUTPUTS))
+    assert compositors.SWAY.info().focused == "DP-2"
     assert ran == [["swaymsg", "-t", "get_outputs"]]
 
 
-def test_other_compositors_run_nothing(monkeypatch):
+def test_another_compositor_is_asked_nothing(monkeypatch):
     ran = []
     monkeypatch.setattr(compositors, "run", ran.append)
-    monkeypatch.delenv("SWAYSOCK", raising=False)
-    monkeypatch.delenv("HYPRLAND_INSTANCE_SIGNATURE", raising=False)
-    assert compositors.detect() == compositors.CompositorInfo()
+    assert compositors.OTHER.info() == compositors.CompositorInfo()
     assert ran == []
+
+
+def test_an_answer_that_is_not_json_says_nothing(monkeypatch):
+    monkeypatch.setattr(compositors, "run", lambda cmd: "hyprctl: socket not found")
+    assert compositors.HYPRLAND.info() == compositors.CompositorInfo()
 
 
 def test_positions_from_sway_rect():

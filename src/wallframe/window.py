@@ -94,6 +94,8 @@ def add_style():
     Gtk.StyleContext.add_provider_for_display(
         display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
     Gtk.IconTheme.get_for_display(display).add_search_path(ICONS_DIR)
+    # Found there too, so the windows have it even without the desktop file linked.
+    Gtk.Window.set_default_icon_name(APP_ID)
 
 
 def to_surface(img):

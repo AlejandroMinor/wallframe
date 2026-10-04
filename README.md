@@ -14,13 +14,34 @@ Wallpaper daemons scale the image to fill the screen and cut off the parts that 
 
 ## Requirements
 
-A Wayland compositor that awww or swww runs on: Hyprland, sway, niri, river, Wayfire and the like, on any distribution. It is tested on Hyprland. GNOME and KDE Plasma do not work, because they draw their own wallpaper and awww cannot show one there.
+One of these, on Wayland:
 
-`gtk4` (4.10 or newer), `python-gobject`, `python-cairo`, `python-pillow`, and `awww` or `swww`. On Arch Linux:
+- A compositor that awww or swww runs on: Hyprland, sway, niri, river, Wayfire and the like. It is tested on Hyprland.
+- KDE Plasma 6. Plasma draws its own wallpaper, so wallframe sets it through Plasma, one per screen, without awww. `kscreen-doctor`, part of Plasma, gives each screen its output name, scale and place. Tested on Plasma 6.7.
+
+GNOME does not work: it shows one wallpaper across all monitors, and awww cannot draw one there.
+
+It needs GTK 4.10 or newer, PyGObject, pycairo and Pillow, and outside Plasma, awww or swww.
+
+**Arch Linux.** Everything is in the official repositories. On Plasma, leave out `awww`:
 
 ```bash
 sudo pacman -S gtk4 python-gobject python-cairo python-pillow awww
 ```
+
+**Fedora:**
+
+```bash
+sudo dnf install gtk4 python3-gobject python3-cairo python3-pillow
+```
+
+**Debian 13 or newer, Ubuntu 24.04 or newer.** Debian 12's GTK is too old:
+
+```bash
+sudo apt install gir1.2-gtk-4.0 python3-gi python3-gi-cairo python3-pil
+```
+
+Fedora, Debian and Ubuntu do not package awww or swww. On their Plasma editions nothing else is needed; with Hyprland, sway and the like, build awww from [its source](https://codeberg.org/LGFae/awww).
 
 Optional:
 
@@ -42,6 +63,15 @@ To run it from anywhere as `wallframe`, link it into a folder in your `PATH`:
 
 ```bash
 ln -s "$PWD/wallframe" ~/.local/bin/wallframe
+```
+
+To find it in your app launcher, with its icon in the taskbar instead of the generic Wayland one, link its desktop file and icons too:
+
+```bash
+ln -s "$PWD/data/io.github.AlejandroMinor.wallframe.desktop" ~/.local/share/applications/
+mkdir -p ~/.local/share/icons/hicolor/scalable/apps ~/.local/share/icons/hicolor/symbolic/apps
+ln -s "$PWD"/src/wallframe/icons/hicolor/scalable/apps/*.svg ~/.local/share/icons/hicolor/scalable/apps/
+ln -s "$PWD"/src/wallframe/icons/hicolor/symbolic/apps/*.svg ~/.local/share/icons/hicolor/symbolic/apps/
 ```
 
 ### Open as a floating window
@@ -103,7 +133,7 @@ wallframe opens on the focused monitor. To start on a different monitor, give it
 
 ## Development
 
-The tests cover everything except the window: framing, cropping, saved state and reading the daemon and compositor output. They do not need a display or a wallpaper daemon:
+The tests cover everything except the window: framing, cropping, saved state and reading the daemon and compositor output. They do not need a display or a wallpaper daemon. If `node` is installed, the scripts wallframe sends to Plasma also run, against a stand-in for Plasma:
 
 ```bash
 python -m venv --system-site-packages .venv

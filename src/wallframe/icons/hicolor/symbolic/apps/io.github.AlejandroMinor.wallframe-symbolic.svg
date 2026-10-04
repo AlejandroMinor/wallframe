@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <!-- The app icon in one color: a portrait frame's corners on a faint landscape. -->
+  <path fill="#2e3436" opacity="0.35" d="M2 3h12c.55 0 1 .45 1 1v8c0 .55-.45 1-1 1H2c-.55 0-1-.45-1-1V4c0-.55.45-1 1-1zm0 1v8h12V4z"/>
+  <path fill="#2e3436" d="M5 4h2v1.25H6.25V6H5zm6 0v2H9.75v-.75H9V4zm0 8H9v-1.25h.75V10H11zm-6 0v-2h1.25v.75H7V12z"/>
+</svg>

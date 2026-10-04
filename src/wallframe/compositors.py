@@ -1,12 +1,11 @@
+"""Compositors that awww or swww draw the wallpaper on: Hyprland, sway and the rest."""
+
 import json
 import os
 from dataclasses import dataclass, field
 
+from . import daemons
 from .commands import run
-
-# Each compositor sets its own variable; both answer with the same JSON fields.
-_QUERIES = {"HYPRLAND_INSTANCE_SIGNATURE": ["hyprctl", "monitors", "-j"],
-            "SWAYSOCK": ["swaymsg", "-t", "get_outputs"]}
 
 
 @dataclass
@@ -58,12 +57,33 @@ def display_model(output):
     return f"{make[0]} {model}"
 
 
-def detect():
-    """Asks Hyprland or sway; empty on any other compositor."""
-    for variable, cmd in _QUERIES.items():
-        if os.environ.get(variable):
-            try:
-                return parse_outputs(json.loads(run(cmd) or "[]"))
-            except ValueError:
-                break
-    return CompositorInfo()
+class Compositor:
+    """A desktop where awww or swww draws the wallpaper (see desktops.py).
+
+    With a `command`, it answers with its monitors as JSON, as Hyprland and sway
+    do; without one, it says nothing about them, and wallframe still works.
+    """
+
+    def __init__(self, name, variable=None, command=None):
+        self.name = name          # as XDG_CURRENT_DESKTOP names it, in lower case
+        self.variable = variable  # set in its session, and needed to reach it
+        self.command = command
+
+    def reachable(self):
+        return bool(self.variable and os.environ.get(self.variable))
+
+    def info(self):
+        if not self.command:
+            return CompositorInfo()
+        try:
+            return parse_outputs(json.loads(run(self.command) or "[]"))
+        except ValueError:
+            return CompositorInfo()
+
+    def wallpaper(self):
+        return daemons.detect()
+
+
+HYPRLAND = Compositor("hyprland", "HYPRLAND_INSTANCE_SIGNATURE", ["hyprctl", "monitors", "-j"])
+SWAY = Compositor("sway", "SWAYSOCK", ["swaymsg", "-t", "get_outputs"])
+OTHER = Compositor("other")  # niri, river, Wayfire...: awww works, nothing else is asked

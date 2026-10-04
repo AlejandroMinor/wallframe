@@ -2,7 +2,7 @@
 
 import sys
 
-from . import compositors, daemons, render, upscalers, window
+from . import desktops, render, upscalers, window
 from .layouts import Layouts
 from .commands import notify
 from .monitor import Monitor
@@ -10,12 +10,13 @@ from .state import Store
 
 
 def main():
-    daemon = daemons.detect()
+    desktop = desktops.detect()
+    daemon = desktop.wallpaper()
     if not daemon:
         notify("No image wallpaper found.")
         return 1
 
-    info = compositors.detect()
+    info = desktop.info()
     store = Store()
     monitors = [Monitor(o, store, info.models.get(o.name, ""))
                 for o in daemon.outputs() if render.is_still_image(o.image)]
