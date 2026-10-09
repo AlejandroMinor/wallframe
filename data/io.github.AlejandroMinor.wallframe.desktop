@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=wallframe
+GenericName=Wallpaper Framer
+Comment=Frame the wallpaper inside each monitor, and save layouts for all of them
+Exec=wallframe
+Icon=io.github.AlejandroMinor.wallframe
+Terminal=false
+Categories=Settings;DesktopSettings;
+Keywords=wallpaper;background;monitor;crop;
+StartupNotify=true
+StartupWMClass=io.github.AlejandroMinor.wallframe

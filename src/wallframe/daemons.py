@@ -48,7 +48,7 @@ class Daemon:
 
 
 def detect():
-    """The running daemon, or None."""
+    """awww or swww, whichever is running, or None."""
     for program in ("awww", "swww"):
         daemon = Daemon(program)
         if daemon.outputs():
