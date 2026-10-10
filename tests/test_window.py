@@ -80,6 +80,8 @@ class StandIn:
         self.move_backdrop = Widget()
         self.grid_button = Widget()
         self.layouts_button = Widget()
+        self.arrange_button = Widget()
+        self.dragged = self.held = None
         self.layouts = (Layouts(os.path.join(monitors[0].store.directory, "layouts"))
                         if monitors else None)
         self.positions = {}

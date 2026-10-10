@@ -47,6 +47,10 @@ SHORTCUTS = [
     ("Background (zoomed out, Blur fill)", [
         (("B",), "Move the background instead of the image"),
     ]),
+    ("Span", [
+        (("M",), "Arrange the monitors as they stand on your desk"),
+        (("0",), "While arranging: back to their real sizes and places"),
+    ]),
     ("Window", [
         (("Tab",), "Next monitor, or the span across all of them"),
         (("G",), "Rule-of-thirds grid"),
@@ -56,6 +60,7 @@ SHORTCUTS = [
     ]),
 ]
 MOUSE = {"Drag", "Scroll"}
+SNAP = 10            # canvas pixels within which a dragged monitor meets another's edge
 NUDGE = 5            # monitor pixels per arrow key press
 NUDGE_SHIFT = 50     # with Shift held
 # GTK's own theme leaves these classes uncolored on labels; the named colors
@@ -170,6 +175,8 @@ class Window(Gtk.ApplicationWindow):
         self.postponed = set()  # (monitor, image) questions closed with Esc
         self.flash_timer = None
         self.applying = None  # what is being applied off the main thread, e.g. "Work"
+        self.dragged = None   # the span's monitor being dragged into place, by name
+        self.held = None      # the canvas's (scale, origin) while it is dragged
 
         # Size against the monitor the window opens on; without knowing which,
         # the smallest one, so it fits wherever it lands.
@@ -246,6 +253,12 @@ class Window(Gtk.ApplicationWindow):
                                           visible=len(self.monitors) > 1)
         self.copy_button.set_create_popup_func(self.fill_copy_menu)
         tools.append(self.copy_button)
+        # Only in the span: dragging moves the monitors' frames instead of the image.
+        self.arrange_button = icon_button("preferences-desktop-display-symbolic",
+                                          "Arrange the monitors as they stand on your desk (M)",
+                                          self.on_arrange, toggle=True)
+        self.arrange_button.set_visible(False)
+        tools.append(self.arrange_button)
         self.grid_button = icon_button("view-grid-symbolic", "Rule-of-thirds grid (G)",
                                        self.on_grid_button, toggle=True)
         self.grid_button.set_active(self.show_grid)
@@ -602,6 +615,7 @@ class Window(Gtk.ApplicationWindow):
         drag = Gtk.GestureDrag()
         drag.connect("drag-begin", self.on_drag_begin)
         drag.connect("drag-update", self.on_drag_update)
+        drag.connect("drag-end", self.on_drag_end)
         self.area.add_controller(drag)
 
         scroll = Gtk.EventControllerScroll(flags=Gtk.EventControllerScrollFlags.VERTICAL)
@@ -630,6 +644,11 @@ class Window(Gtk.ApplicationWindow):
     @property
     def spanning(self):
         return self.span is not None and self.monitor is self.span
+
+    @property
+    def arranging(self):
+        """True while dragging moves the span's monitors instead of the image."""
+        return self.spanning and self.arrange_button.get_active()
 
     @property
     def backdrop_visible(self):
@@ -666,8 +685,15 @@ class Window(Gtk.ApplicationWindow):
         return cached[1]
 
     def frame(self):
-        """Returns (scale, fx, fy): canvas pixels per monitor pixel, frame origin."""
+        """Returns (scale, fx, fy): canvas pixels per monitor pixel, frame origin.
+
+        While a monitor of the span is dragged, the desk holds still on the canvas,
+        though the box around the monitors grows or shrinks under the pointer.
+        """
         monitor = self.monitor
+        if self.held:
+            scale, ox, oy = self.held
+            return scale, ox + monitor.left * scale, oy + monitor.top * scale
         aw, ah = self.area.get_width(), self.area.get_height()
         scale = min((aw - 2 * MARGIN) / monitor.width, (ah - 2 * MARGIN) / monitor.height)
         return scale, (aw - monitor.width * scale) / 2, (ah - monitor.height * scale) / 2
@@ -706,7 +732,7 @@ class Window(Gtk.ApplicationWindow):
         # While the background moves, the image fades so the background shows through,
         # and a dashed outline keeps its place visible.
         moving_backdrop = self.moving is not framing
-        cr.paint_with_alpha(0.35 if moving_backdrop else 1)
+        cr.paint_with_alpha(0.35 if moving_backdrop or self.arranging else 1)
         cr.restore()
         if moving_backdrop:
             cr.save()
@@ -739,7 +765,7 @@ class Window(Gtk.ApplicationWindow):
             cr.stroke()
 
         cr.set_source_rgba(1, 1, 1, 0.9)
-        cr.set_line_width(2)
+        cr.set_line_width(3 if self.arranging else 2)
         for _name, x, y, w, h in frames:
             cr.rectangle(x, y, w, h)
         cr.stroke()
@@ -763,6 +789,7 @@ class Window(Gtk.ApplicationWindow):
         self.index = index
         self.buttons[index].set_active(True)
         self.move_backdrop.set_active(False)  # each monitor starts by moving its image
+        self.arrange_button.set_active(False)
         self.refresh()
 
     def on_pick(self, button, index):
@@ -777,6 +804,7 @@ class Window(Gtk.ApplicationWindow):
         self.discard_button.set_sensitive(self.monitor.touched)
         # The span has no other monitor to copy from: it is all of them.
         self.copy_button.set_visible(len(self.monitors) > 1 and not self.spanning)
+        self.arrange_button.set_visible(self.spanning)
         self.refresh_ai()
         monitor = self.monitor
         framing = monitor.framing
@@ -803,6 +831,8 @@ class Window(Gtk.ApplicationWindow):
             widget.set_visible(not blur)
         self.zoom_label.set_label(f"{pct}%")
         details = describe(monitor) + [
+            ("real sizes" if monitor.real_sizes else "desktop sizes") if self.spanning else "",
+            "arranging the monitors" if self.arranging else "",
             "moving the background" if self.moving is not framing else "",
             "upscaling…" if monitor.name in self.upscaling else "",
             "upscaled" if monitor.image != monitor.original else "",
@@ -819,8 +849,21 @@ class Window(Gtk.ApplicationWindow):
         self.area.queue_draw()
 
     def edit(self, action):
+        if self.arranging:
+            if action == "reset":
+                self.span.reset_places()
+                self.flash("The monitors are back to their real sizes and places", "accent")
+                self.refresh()
+            return  # mirror and rotate would move the picture under the monitors unseen
         self.monitor.edit(action)
         self.refresh()
+
+    def on_arrange(self):
+        if self.syncing:
+            return
+        self.refresh()
+        if self.arranging:
+            self.flash("Drag the monitors to match your desk · M to finish", "accent")
 
     def fill_copy_menu(self, menu_button):
         """One row per other monitor, with the picture it shows: copy all of it, or the fill."""
@@ -1119,12 +1162,44 @@ class Window(Gtk.ApplicationWindow):
             self.monitor.framing.blur = round(scale.get_value())
             self.refresh()
 
-    def on_drag_begin(self, _gesture, _x, _y):
+    def on_drag_begin(self, _gesture, x, y):
+        if self.arranging:
+            self.begin_arranging(x, y)
+            return
         self.drag_origin = (self.moving.x, self.moving.y)
         if self.moving is not self.monitor.framing and not self.moving.can_move:
             self.flash("Zoom in the background to move it", "warning")
 
+    def begin_arranging(self, x, y):
+        """Picks the span's monitor under (x, y) on the canvas, to drag it."""
+        scale, fx, fy = self.frame()
+        span = self.span
+        under = [(name, fx + mx * scale, fy + my * scale, w * scale, h * scale)
+                 for name, mx, my, w, h in span.frames()]
+        name = next((name for name, left, top, w, h in reversed(under)
+                     if left <= x <= left + w and top <= y <= top + h), None)
+        self.dragged = name
+        if not name:
+            self.flash("Drag one of the monitors", "warning")
+            return
+        self.held = (scale, fx - span.left * scale, fy - span.top * scale)
+        self.drag_origin = span.places[name][:2]
+
+    def on_drag_end(self, _gesture, _dx, _dy):
+        if self.dragged:
+            self.dragged, self.held = None, None
+            self.span.settle()
+            self.refresh()
+
     def on_drag_update(self, _gesture, dx, dy):
+        if self.arranging:
+            if self.dragged:
+                scale = self.held[0]
+                x, y = self.span.snap(self.dragged, self.drag_origin[0] + dx / scale,
+                                      self.drag_origin[1] + dy / scale, SNAP / scale)
+                self.span.move_monitor(self.dragged, x, y)
+                self.refresh()
+            return
         scale, _, _ = self.frame()
         self.moving.move_to(self.drag_origin[0] + dx / scale, self.drag_origin[1] + dy / scale)
         self.refresh()
@@ -1167,6 +1242,8 @@ class Window(Gtk.ApplicationWindow):
             self.grid_button.set_active(not self.grid_button.get_active())
         elif key == "b":
             self.toggle_backdrop()
+        elif key == "m" and self.spanning:
+            self.arrange_button.set_active(not self.arrange_button.get_active())
         elif key == "c":
             self.moving.center()
             self.refresh()

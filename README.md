@@ -113,6 +113,7 @@ for_window [app_id="io.github.AlejandroMinor.wallframe"] floating enable
 | Rule-of-thirds grid | Toolbar | `G` |
 | Save or switch layouts | Layouts button | |
 | Next monitor, or the span | Monitor buttons | `Tab` |
+| Arrange the monitors of the span as on your desk | Toolbar, in the span | `M` |
 | Apply to the marked monitors | Apply | `Enter` |
 | Show all keyboard shortcuts | Keyboard button, bottom left | `?` / `F1` |
 | Close | | `Esc` |
@@ -132,6 +133,8 @@ The **Layouts** panel saves what every monitor shows: the picture and its framin
 ### One picture across all monitors
 
 The **Span** button, after the monitor buttons, frames one picture across every monitor. The canvas shows your monitors where they stand on the desk, each with its own frame, over the picture. Drag, zoom, mirror, rotate, fill and upscale work as on one monitor. Apply gives each monitor its own piece, cropped at its own resolution, so a scaled 4K monitor next to a 1080p one stays sharp and lines up. Where no monitor is, as beside a portrait monitor that stands taller than the others, nothing shows.
+
+Monitors of different sizes and resolutions line up too. wallframe reads each monitor's real size from its EDID, so the picture keeps the same size across a 27" 1440p and a 24" 1080p, and a line that crosses from one to the other does not jump. The status bar says "real sizes" when it could read them all, or "desktop sizes" when it could not. To match how the monitors stand on your desk, higher, lower or apart, press **Arrange** (or `M`) and drag them; they snap to each other's edges, and `0` puts them back.
 
 Span needs to know where the monitors are, so it is there on Hyprland, sway and Plasma, with two monitors or more. A layout saved from the span brings the span back. Editing one monitor on its own takes that monitor out of the span; Apply on the span puts it back.
 

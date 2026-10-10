@@ -171,6 +171,18 @@ class Framing:
                 part.spanned = True
         return piece
 
+    def move_area(self, dx, dy, width, height):
+        """The monitor became width x height and its corner moved by (dx, dy), while
+        the image stayed where it was: a span whose monitors were rearranged.
+
+        Nothing is clamped here, so the image does not jump while a monitor is
+        dragged; clamp() once the dragging is over.
+        """
+        self.monitor_w, self.monitor_h = width, height
+        self.x, self.y = self.x - dx, self.y - dy
+        if self.backdrop:
+            self.backdrop.move_area(dx, dy, width, height)
+
     def placement(self):
         """Where the image lands: (part of the image, part of the monitor it covers).
 

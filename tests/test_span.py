@@ -214,3 +214,111 @@ def _close(a, b, tolerance=8):
     """True when no pixel differs by more than `tolerance`: resampling at the edges
     of a piece may round a little differently from the whole."""
     return max(high for _low, high in ImageChops.difference(a, b).getextrema()) <= tolerance
+
+
+# --- Real sizes: one picture at one size across monitors of different densities
+
+# A 27" 1440p and a 24" 1080p side by side, both at 100%, tops lined up on the desktop.
+DESK = {"DP-1": (0, 0, 2560, 1440), "DP-2": (2560, 0, 1920, 1080)}
+MM = {"DP-1": (597, 336), "DP-2": (531, 299)}
+
+
+def desk_monitors(tmp_path, positions=DESK):
+    image = stripes(tmp_path / "wide.png", (1200, 300))
+    store = Store(tmp_path / "data")
+    return [Monitor(Output(name, w, h, image), store) for name, (_x, _y, w, h) in
+            positions.items()]
+
+
+def per_mm(piece, monitor, width_mm):
+    """Picture pixels per millimeter on the monitor: the same everywhere when it fits."""
+    return (monitor.width / width_mm) / piece.framing.zoom
+
+
+def test_with_real_sizes_the_picture_keeps_its_size_across_monitors(tmp_path):
+    monitors = desk_monitors(tmp_path)
+    whole = span.make(monitors, DESK, sizes=MM)
+    assert whole.real_sizes
+    (one, a), (two, b) = whole.pieces()
+    assert per_mm(a, one, 597) == pytest.approx(per_mm(b, two, 531), rel=1e-3)
+    # Without them, the 24" would show it about 19% larger.
+    plain = span.make(monitors, DESK)
+    (one, a), (two, b) = plain.pieces()
+    assert per_mm(b, two, 531) / per_mm(a, one, 597) == pytest.approx(0.84, abs=0.01)
+
+
+def test_monitors_lined_up_by_their_tops_stay_lined_up(tmp_path):
+    whole = span.make(desk_monitors(tmp_path), DESK, sizes=MM)
+    (_one, a), (_two, b) = whole.pieces()
+    # The picture row at each monitor's top edge is the same row.
+    assert -a.framing.y / a.framing.zoom == pytest.approx(-b.framing.y / b.framing.zoom)
+    # And the second starts where the first ends, with no gap or overlap.
+    first, second = whole.places["DP-1"], whole.places["DP-2"]
+    assert second[0] == pytest.approx(first[0] + first[2])
+
+
+def test_centered_monitors_stay_centered_at_their_real_size(tmp_path):
+    centered = {"DP-1": (0, 0, 2560, 1440), "DP-2": (2560, 180, 1920, 1080)}
+    whole = span.make(desk_monitors(tmp_path, centered), centered, sizes=MM)
+    _x, y1, _w, h1 = whole.places["DP-1"]
+    _x, y2, _w, h2 = whole.places["DP-2"]
+    assert y1 + h1 / 2 == pytest.approx(y2 + h2 / 2)
+
+
+def test_a_portrait_monitor_turns_its_size(tmp_path):
+    turned = {"DP-1": (0, 0, 2560, 1440), "DP-2": (2560, 0, 1080, 1920)}
+    whole = span.make(desk_monitors(tmp_path, turned), turned, sizes=MM)
+    assert whole.real_sizes
+    _x, _y, w, h = whole.places["DP-2"]
+    assert h > w
+
+
+def test_a_size_that_does_not_fit_the_monitor_is_not_trusted(tmp_path):
+    monitors = desk_monitors(tmp_path)
+    wrong = {"DP-1": (597, 336), "DP-2": (400, 100)}         # a TV's made-up shape
+    whole = span.make(monitors, DESK, sizes=wrong)
+    assert not whole.real_sizes and whole.places == DESK
+    assert not span.make(monitors, DESK, sizes={"DP-1": (597, 336)}).real_sizes
+
+
+def test_moving_a_monitor_leaves_the_picture_where_it_was(tmp_path):
+    monitors = desk_monitors(tmp_path)
+    whole = span.make(monitors, DESK, sizes=MM)
+    before = whole.piece(monitors[0]).key()
+    x, y, _w, _h = whole.places["DP-2"]
+    whole.move_monitor("DP-2", x, y - 40)          # above the top: the box grows upward
+    assert whole.top < 0
+    assert whole.piece(monitors[0]).key() == before   # DP-1 still shows the same part
+    assert whole.touched
+
+
+def test_a_dragged_monitor_meets_the_edge_of_another(tmp_path):
+    whole = span.make(desk_monitors(tmp_path), DESK, sizes=MM)
+    x, y, _w, _h = whole.places["DP-2"]
+    assert whole.snap("DP-2", x + 6, y - 7, reach=10) == (pytest.approx(x), pytest.approx(y))
+    assert whole.snap("DP-2", x + 60, y + 60, reach=10) == (x + 60, y + 60)
+
+
+def test_discard_and_reset_put_the_monitors_back(tmp_path):
+    monitors = desk_monitors(tmp_path)
+    whole = span.make(monitors, DESK, sizes=MM)
+    start = dict(whole.places)
+    whole.move_monitor("DP-2", 3000, 300)
+    whole.discard_edit()
+    assert whole.places == start and not whole.touched
+    whole.move_monitor("DP-2", 3000, 300)
+    whole.reset_places()
+    assert whole.places == whole.default
+
+
+def test_the_places_come_back_with_the_span(tmp_path):
+    monitors = desk_monitors(tmp_path)
+    whole = span.make(monitors, DESK, sizes=MM)
+    whole.move_monitor("DP-2", 2700, 150)
+    saved = whole.snapshot()
+    again = span.make(monitors, DESK, saved, MM)
+    assert again.places["DP-2"][:2] == (2700, 150)
+    assert again.framing.key() == whole.framing.key()
+    # Saved for other monitors, the places are left out.
+    saved["places"] = {"HDMI-A-1": [0, 0, 10, 10]}
+    assert span.make(monitors, DESK, saved, MM).places == whole.default
