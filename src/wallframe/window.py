@@ -173,6 +173,13 @@ EXPORT_MENU = [
 ]
 
 
+# What is done to the desk as it stands now: not saved things, so not in the Desk tab.
+DESK_MENU = [
+    ("Desk", [("Show the calibration guide", "calibrate"),
+              ("Reset to default", "reset-desk")]),
+]
+
+
 def build_menu(sections, prefix="win"):
     """A menu from [(heading, [(label, action name)])]; each action is "<prefix>.<name>"."""
     menu = Gio.Menu()
@@ -302,7 +309,16 @@ class Window(Gtk.ApplicationWindow):
         tools.append(self.arrange_button)
         self.add_callbacks({"export-picture": self.export_picture,
                             "export-fill": self.export_for_ai,
-                            "copy-prompt": self.copy_fill_prompt})
+                            "copy-prompt": self.copy_fill_prompt,
+                            "calibrate": self.calibrate,
+                            "reset-desk": self.reset_desk})
+        # Only on the span, like the arrange button: they are about how the monitors stand.
+        self.desk_button = Gtk.MenuButton(icon_name="preferences-system-symbolic",
+                                          focusable=False, menu_model=build_menu(DESK_MENU),
+                                          tooltip_text="Desk tools: the calibration guide, "
+                                                       "or back to default")
+        self.desk_button.set_visible(False)
+        tools.append(self.desk_button)
         self.export_button = Gtk.MenuButton(icon_name="send-to-symbolic", focusable=False,
                                             menu_model=build_menu(EXPORT_MENU),
                                             tooltip_text="Export")
@@ -458,10 +474,7 @@ class Window(Gtk.ApplicationWindow):
         row.append(self.arrangement_name)
         row.append(save)
         self.arrangement_list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        self.guide_button = Gtk.Button(label="Show the calibration guide", focusable=False)
-        self.guide_button.connect("clicked", lambda _b: self.calibrate())
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        box.append(self.guide_button)
         box.append(row)
         box.append(self.arrangement_list)
         return box
@@ -1102,11 +1115,7 @@ class Window(Gtk.ApplicationWindow):
         # The span has no other monitor to copy from: it is all of them.
         self.copy_button.set_visible(len(self.monitors) > 1 and not self.spanning)
         self.arrange_button.set_visible(self.spanning)
-        if self.span:  # the guide goes on the span, which is for arranging
-            self.guide_button.set_sensitive(self.arranging)
-            self.guide_button.set_tooltip_text(
-                "Put a grid, numbered lines and diagonals on the span, to line the monitors up by"
-                if self.arranging else "Available while arranging the monitors (M)")
+        self.desk_button.set_visible(self.spanning)
         self.refresh_ai()
         monitor = self.monitor
         framing = monitor.framing
@@ -1167,12 +1176,16 @@ class Window(Gtk.ApplicationWindow):
                 for side, (_other, distance) in sorted(span.gaps(self.selected).items())]
         return f" · gap {' and '.join(near)}" if near else ""
 
+    def reset_desk(self):
+        """The monitors where the desktop and their sizes put them, none turned or tilted."""
+        self.span.reset_places()
+        self.refresh()
+        self.flash("The monitors are back to their real sizes and places", "accent")
+
     def edit(self, action):
         if self.arranging:
             if action == "reset":
-                self.span.reset_places()
-                self.flash("The monitors are back to their real sizes and places", "accent")
-                self.refresh()
+                self.reset_desk()
             else:
                 self.flash("Finish arranging first (M)", "warning")
             return  # mirror and rotate would move the picture under the monitors unseen
@@ -1190,9 +1203,11 @@ class Window(Gtk.ApplicationWindow):
         self.refresh()
 
     def calibrate(self):
-        """Puts the calibration picture on the span, marked for Apply."""
-        if not self.arranging:
+        """Puts the calibration picture on the span, marked for Apply, and shows the span."""
+        if not self.span:
             return
+        if not self.spanning:
+            self.select(self.views.index(self.span))
         path = os.path.join(self.monitors[0].store.directory, calibration.FILE)
         try:
             calibration.make(self.span, path)

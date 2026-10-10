@@ -115,25 +115,62 @@ def test_nothing_to_fill_is_said_and_nothing_is_written(tmp_path):
     assert [style for style, _text in flashed] == ["warning", "warning"]
 
 
-def test_the_menu_points_at_actions_that_exist(tmp_path):
+def test_the_menus_point_at_actions_that_exist(tmp_path):
+    def entries(menu):
+        return {menu.get_item_link(i, "section").get_item_attribute_value(j, "action").get_string()
+                for i in range(menu.get_n_items())
+                for j in range(menu.get_item_link(i, "section").get_n_items())}
+
     def body(window):
-        menu = window.export_button.get_menu_model()
-        wanted = {menu.get_item_link(i, "section").get_item_attribute_value(j, "action").get_string()
-                  for i in range(menu.get_n_items())
-                  for j in range(menu.get_item_link(i, "section").get_n_items())}
+        wanted = entries(window.export_button.get_menu_model())
+        wanted |= entries(window.desk_button.get_menu_model())
         assert {f"win.{name}" for name in window.list_actions()} == wanted
 
     in_window(tmp_path, body)
 
 
-def test_the_guide_button_is_only_for_arranging_and_a_desk_can_be_saved(tmp_path):
+def test_the_desk_tools_are_only_on_the_span_and_work_without_arranging(tmp_path):
     def body(window):
-        assert not window.guide_button.get_sensitive()
-        window.arrange_button.set_active(True)
+        assert window.spanning and window.desk_button.get_visible()
+        assert not window.arranging                       # they do not need the arranging mode
+        window.select(0)
         window.refresh()
-        assert window.guide_button.get_sensitive()
+        assert not window.desk_button.get_visible()       # on a monitor: nothing to calibrate
+        window.select(window.views.index(window.span))
+        window.refresh()
+        assert window.desk_button.get_visible()
+        window.calibrate()
+        assert window.monitor.image.endswith("calibration.png")
+
+    in_window(tmp_path, body)
+
+
+def test_a_desk_can_be_saved_from_its_tab(tmp_path):
+    def body(window):
         window.arrangement_name.set_text("Desk")
         window.save_arrangement()
         assert [name for name, _entry in window.arrangements.named(["DP-1", "DP-2"])] == ["Desk"]
 
     in_window(tmp_path, body)
+
+
+def test_without_a_span_there_are_no_desk_tools(tmp_path):
+    def body(window):
+        assert not window.desk_button.get_visible()
+        window.calibrate()                                # nothing to put it on: no error
+
+    in_window(tmp_path, body, with_span=False)
+
+
+def test_reset_to_default_puts_the_desk_back(tmp_path):
+    def body(window):
+        defaults = dict(window.span.default)
+        window.span.set_yaw("DP-1", 25)
+        window.span.set_pitch("DP-2", 10)
+        window.span.move_monitor("DP-2", 300, 40)
+        window.reset_desk()
+        assert not window.span.yaws and not window.span.pitches
+        assert window.span.places == defaults
+
+    in_window(tmp_path, body)
+

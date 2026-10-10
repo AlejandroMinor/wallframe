@@ -114,7 +114,8 @@ for_window [app_id="io.github.AlejandroMinor.wallframe"] floating enable
 | Save or switch layouts | Layouts button | |
 | Next monitor, or the span | Monitor buttons | `Tab` |
 | Arrange the monitors of the span as on your desk | Toolbar, in the span | `M` |
-| Show the calibration guide on the span | Layouts panel, Desk tab, while arranging | |
+| Show the calibration guide on the span | Desk tools (the tools icon) | |
+| Put the monitors back where the desktop has them | Desk tools (the tools icon), or `0` while arranging | |
 | Turn the selected monitor by its real angle | Keys, while arranging | `.` / `,` (Shift: 5°) |
 | Tilt the selected monitor up or down | Keys, while arranging | `<` / `>` |
 | Save or bring back where the monitors stand | Layouts panel, Desk tab | |
@@ -162,7 +163,7 @@ All of this is done in the editor, while arranging, with the **Arrange** button 
 
 ![Arranging the monitors: the desk's centimeters, the angle of each turned monitor in its tag, and the selected monitor in blue](docs/span-arrange.webp)
 
-1. **Show the guide.** Open the **Layouts** panel (the bookmark), go to its **Desk** tab, press **Show the calibration guide**, then Apply. It draws a grid in real centimeters, a white line through the middle and two diagonals. These lines are your ruler: they should look straight across every join.
+1. **Show the guide.** On the Span, press the **Desk tools** button (the tools icon) and choose **Show the calibration guide**, then Apply. It draws a grid in real centimeters, a white line through the middle and two diagonals. These lines are your ruler: they should look straight across every join.
 2. **Height.** Click the frame of a side monitor in the canvas and move it with the arrow keys (1 mm each, 10 mm with Shift) until the white line is one straight line across the join. Move the outer monitors and leave the center one alone.
 3. **Angle.** If the diagonals still look bent, give that monitor an angle: `.` adds 1° and `,` removes 1° (`:` and `;` for 5°). A negative angle does the opposite. If a monitor leans back or forward, `<` and `>` do the same up and down. The angle also changes the separation between the monitors by itself. Step 4 fixes that.
 4. **Separation.** Your real monitors have bezels, so there is a gap between the screens. In the canvas, the distance between two frames is that gap: it decides how much of the picture is skipped between them. Move the frame of the outer monitor with the left and right arrow keys, a few millimeters at a time, until what crosses the join looks like one picture. If it gets worse, go the other way.
@@ -172,7 +173,7 @@ Everything you do here can feel backwards, whether it is the arrow keys, draggin
 
 Keep this order: height, angle, separation. Each step changes the next one, so doing them out of order means doing them twice.
 
-The angle is a simple correction. It stretches the picture but does not model perspective, so lines still bend a little toward the far edge of a turned monitor, and it is only right from one seat. `0` while arranging puts the monitors back where the compositor has them, with no angle.
+The angle is a simple correction. It stretches the picture but does not model perspective, so lines still bend a little toward the far edge of a turned monitor, and it is only right from one seat. `0` while arranging, or **Reset to default** in the Desk tools menu, puts the monitors back where the compositor has them, with no angle.
 
 > **A friendly tip.** It will not be perfect, so do not chase perfection. Monitors are not as fixed as they look: you clean them, you show something to someone, you adjust them for any reason, and they never come back to the exact same place. Do not spend your time on these exact settings. A close result is enough.
 
