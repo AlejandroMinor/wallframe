@@ -12,7 +12,7 @@ import pytest
 pytest.importorskip("gi")  # only the window needs GTK
 from PIL import Image  # noqa: E402
 
-from wallframe import upscalers  # noqa: E402
+from wallframe import span, upscalers  # noqa: E402
 from wallframe.commands import Cancel  # noqa: E402
 from wallframe.daemons import Daemon, Output  # noqa: E402
 from wallframe.layouts import Layouts  # noqa: E402
@@ -70,8 +70,10 @@ class StandIn:
     through to the real Window, so the code under test is the real code.
     """
 
-    def __init__(self, monitors, daemon=None, index=0):
+    def __init__(self, monitors, daemon=None, index=0, span=None):
         self.monitors, self.daemon, self.index = monitors, daemon, index
+        self.span = span  # None as when the desktop does not say where the monitors are
+        self.views = monitors + ([span] if span else [])
         self.fill_button = Widget()
         self.help_button = Widget()
         self.copy_button = Widget()
@@ -94,6 +96,9 @@ class StandIn:
 
     def refresh(self):
         pass
+
+    def select(self, index):
+        self.index = index
 
     def get_focus(self):
         return None
@@ -500,3 +505,82 @@ def test_shift_still_takes_bigger_steps(tmp_path):
         assert key(StandIn([monitor]), "Right", state) is True
     # A right nudge grows x, and Shift grows it by the difference between the steps.
     assert shifted.framing.x - plain.framing.x == NUDGE_SHIFT - NUDGE
+
+
+# --- The span: one picture across every monitor
+
+
+def spanning(tmp_path, daemon=None):
+    """A window on the span of two monitors side by side, sharing one store."""
+    picture = wallpaper(tmp_path, "wide.png", (400, 100))
+    left = monitor_on(tmp_path, "DP-1", 200, 100, picture)
+    right = monitor_on(tmp_path, "DP-2", 200, 100, picture)
+    places = {"DP-1": (0, 0, 200, 100), "DP-2": (200, 0, 200, 100)}
+    across = span.make([left, right], places)
+    return StandIn([left, right], daemon or RecordingDaemon(), index=2, span=across)
+
+
+def test_the_span_gives_every_monitor_its_piece(tmp_path):
+    window = spanning(tmp_path)
+    window.span.edit("mirror")
+    assert Window.pending(window) == [window.span]
+    Window.apply_touched(window)
+    assert window.daemon.shown.keys() == {"DP-1", "DP-2"}
+    assert window.span.live and not window.span.touched
+    assert window.monitors[0].store.span()["flip_h"]          # remembered for next time
+    assert window.flashed[-1] == ("success", "Applied across all monitors")
+    Window.apply_touched(window)
+    assert window.flashed[-1] == ("warning", "Nothing to apply")
+
+
+def test_a_span_not_on_the_monitors_can_be_applied_unedited(tmp_path):
+    window = spanning(tmp_path)
+    assert not window.span.touched and not window.span.live
+    assert Window.pending(window) == [window.span]
+
+
+def test_editing_one_monitor_leaves_the_span(tmp_path):
+    window = spanning(tmp_path)
+    Window.apply_touched(window)
+    window.index = 0
+    window.monitors[0].edit("mirror")
+    Window.apply_touched(window)
+    assert not window.span.live
+    window.index = 2
+    assert Window.pending(window) == [window.span]          # Apply puts it back
+
+
+def test_a_layout_saved_from_the_span_brings_it_back(tmp_path):
+    window = spanning(tmp_path)
+    window.span.framing.zoom_at(1.5, 300, 50)
+    saved = window.layouts.save("Wide", window.monitors, window.positions,
+                                Window.layout_span(window))
+    assert saved.span
+    Window.apply_touched(window)
+    window.index = 0
+    window.monitors[0].edit("mirror")
+    Window.apply_touched(window)
+    window.span.edit("rotate")                               # an edit the layout drops
+
+    Window.activate_layout(window, saved)
+    assert window.monitor is window.span and window.span.live
+    assert window.span.framing.rotation == 0 and not window.span.touched
+    assert Window.shows_layout(window, saved)
+
+
+def test_a_layout_without_a_span_leaves_the_span_view(tmp_path):
+    window = spanning(tmp_path)
+    window.index = 0
+    plain = window.layouts.save("Plain", window.monitors)
+    assert plain.span is None
+    window.index = 2
+    window.monitors[0].edit("mirror")
+    Window.activate_layout(window, plain)
+    assert window.index == 0
+
+
+def test_tab_reaches_the_span_after_the_monitors(tmp_path):
+    window = spanning(tmp_path)
+    window.index = 1
+    assert key(window, "Tab") is True and window.monitor is window.span
+    assert key(window, "Tab") is True and window.index == 0

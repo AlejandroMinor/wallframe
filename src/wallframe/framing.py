@@ -13,6 +13,9 @@ class Framing:
     Below min_zoom the image no longer covers the monitor and `fill` paints the gaps.
     With the blur fill, `backdrop` frames the same image behind: another Framing
     that always covers the monitor and shares the mirror and rotation.
+
+    A framing can also be one monitor's piece of a span (see piece()): then it is
+    `spanned`, never clamped, and the image may lie off to one side of the monitor.
     """
 
     def __init__(self, monitor_w, monitor_h, source_w, source_h, backdrop=True):
@@ -23,6 +26,7 @@ class Framing:
         self.fill = "blur"
         self.fill_color = "#000000"
         self.blur = BLUR_DEFAULT
+        self.spanned = False
         self.backdrop = (Framing(monitor_w, monitor_h, source_w, source_h, backdrop=False)
                          if backdrop else None)
         self.recenter()
@@ -53,8 +57,15 @@ class Framing:
 
     @property
     def covers(self):
-        """True when the image fills the whole monitor, so there are no gaps."""
-        return self.zoom >= self.min_zoom * (1 - 1e-9)
+        """True when the image fills the whole monitor, so there are no gaps.
+
+        Told by where the image lies, not by its zoom alone: a span's piece can be
+        large enough and still lie beside its monitor.
+        """
+        slack = 1e-6 * (self.monitor_w + self.monitor_h)  # float noise, far below a pixel
+        return (self.x <= slack and self.y <= slack
+                and self.x + self.image_w * self.zoom >= self.monitor_w - slack
+                and self.y + self.image_h * self.zoom >= self.monitor_h - slack)
 
     @property
     def can_move(self):
@@ -69,6 +80,7 @@ class Framing:
 
     def recenter(self):
         """Covers the monitor, centered, like the daemon's own crop."""
+        self.spanned = False
         self.zoom = self.min_zoom
         self.x = (self.monitor_w - self.image_w * self.zoom) / 2
         self.y = (self.monitor_h - self.image_h * self.zoom) / 2
@@ -109,7 +121,9 @@ class Framing:
 
         On each axis, an image larger than the monitor must cover it, and a
         smaller one must stay inside it. The backdrop never shrinks: it always covers.
+        A span's piece that gets clamped is a framing of its own from then on.
         """
+        self.spanned = False
         self.zoom = min(max(self.zoom, self.lowest_zoom), self.min_zoom * MAX_ZOOM)
         self.x = _clamp_axis(self.x, self.monitor_w, self.image_w * self.zoom)
         self.y = _clamp_axis(self.y, self.monitor_h, self.image_h * self.zoom)
@@ -134,6 +148,28 @@ class Framing:
         left, top = -self.x / self.zoom, -self.y / self.zoom
         return (left, top,
                 left + self.monitor_w / self.zoom, top + self.monitor_h / self.zoom)
+
+    def piece(self, left, top, width, height, pixels_w, pixels_h):
+        """What one monitor of a span shows, as a framing of that monitor.
+
+        This framing covers the whole desktop, in logical pixels; the monitor sits
+        at (left, top, width, height) on it and has pixels_w x pixels_h real
+        pixels, more than its logical size when the desktop scales it. The pieces
+        of all the monitors line up into one picture, gaps and blur included.
+        """
+        scale = pixels_w / width
+        piece = Framing(pixels_w, pixels_h, self.source_w, self.source_h,
+                        backdrop=bool(self.backdrop))
+        piece.fill, piece.fill_color = self.fill, self.fill_color
+        piece.blur = round(self.blur * scale)  # in monitor pixels, like everything else
+        for part, whole in ((piece, self), (piece.backdrop, self.backdrop)):
+            if whole:
+                part.flip_h, part.flip_v = whole.flip_h, whole.flip_v
+                part.rotation = whole.rotation
+                part.zoom = whole.zoom * scale
+                part.x, part.y = (whole.x - left) * scale, (whole.y - top) * scale
+                part.spanned = True
+        return piece
 
     def placement(self):
         """Where the image lands: (part of the image, part of the monitor it covers).
@@ -173,6 +209,8 @@ class Framing:
         saved = {"monitor": [self.monitor_w, self.monitor_h],
                  "zoom": self.relative_zoom, "x": self.x, "y": self.y,
                  "flip_h": self.flip_h, "flip_v": self.flip_v, "rotation": self.rotation}
+        if self.spanned:
+            saved["span"] = True  # restored as it is, never clamped
         if self.backdrop:
             backdrop = self.backdrop
             saved.update(fill=self.fill, fill_color=self.fill_color, blur=self.blur,
@@ -186,6 +224,7 @@ class Framing:
         That happens when a layout or state.json meets another monitor on the same
         output, and when copying between monitors. The image point that was at the
         center of the monitor goes back to its center, at the same relative zoom.
+        A span's piece comes back exactly as it was, unless the monitor changed size.
         """
         self.flip_h = saved.get("flip_h", False)
         self.flip_v = saved.get("flip_v", False)
@@ -194,23 +233,29 @@ class Framing:
         self.fill_color = saved.get("fill_color", "#000000")
         self.blur = saved.get("blur", BLUR_DEFAULT)
         monitor = saved.get("monitor")  # missing from files saved before it was kept
-        self.place(saved, monitor)
+        exact = bool(saved.get("span")) and tuple(monitor or ()) == (self.monitor_w,
+                                                                     self.monitor_h)
+        self.place(saved, monitor, exact)
         if self.backdrop:
             backdrop = self.backdrop
             backdrop.flip_h, backdrop.flip_v, backdrop.rotation = (
                 self.flip_h, self.flip_v, self.rotation)
             backdrop.recenter()
             if "backdrop" in saved:
-                backdrop.place(saved["backdrop"], monitor)
+                backdrop.place(saved["backdrop"], monitor, exact)
 
-    def place(self, saved, monitor):
+    def place(self, saved, monitor, exact=False):
         """Sets the zoom and position `saved` had on `monitor`, a (width, height) or None.
 
         On a monitor of another size, the image point at its center is found as a
         share of the image, so it also holds between copies of the picture at
-        different resolutions, like an upscaled one.
+        different resolutions, like an upscaled one. `exact` puts it back unclamped,
+        as a span's piece.
         """
         self.zoom = self.min_zoom * saved["zoom"]
+        if exact:
+            self.x, self.y, self.spanned = saved["x"], saved["y"], True
+            return
         self.clamp()  # the zoom first: the position depends on it
         x, y = saved["x"], saved["y"]
         if monitor and tuple(monitor) != (self.monitor_w, self.monitor_h):

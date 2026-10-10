@@ -13,6 +13,7 @@ from . import render, upscalers  # noqa: E402
 from .commands import Cancel, Cancelled  # noqa: E402
 from .framing import BLUR_RANGE, FILLS, MAX_ZOOM  # noqa: E402
 from .layouts import Layouts  # noqa: E402
+from .monitor import Snapshot  # noqa: E402
 
 APP_ID = "io.github.AlejandroMinor.wallframe"
 # wallframe's own icons, for what the icon theme has no symbol for.
@@ -47,7 +48,7 @@ SHORTCUTS = [
         (("B",), "Move the background instead of the image"),
     ]),
     ("Window", [
-        (("Tab",), "Next monitor"),
+        (("Tab",), "Next monitor, or the span across all of them"),
         (("G",), "Rule-of-thirds grid"),
         (("Enter",), "Apply to the marked monitors"),
         (("?", "F1"), "Show these shortcuts"),
@@ -77,12 +78,14 @@ label.keycap {
 """
 
 
-def run(monitors, daemon, start, focused, upscaler=None, layouts=None, positions=None):
-    """Opens the editor on monitors[start] and returns the exit status."""
+def run(monitors, daemon, start, focused, upscaler=None, layouts=None, positions=None,
+        span=None):
+    """Opens the editor on monitors[start], or on the span when start is past them,
+    and returns the exit status."""
     app = Gtk.Application(application_id=APP_ID)
     app.connect("startup", lambda _app: add_style())
     app.connect("activate", lambda _app: Window(app, monitors, daemon, start, focused,
-                                                upscaler, layouts, positions).present())
+                                                upscaler, layouts, positions, span).present())
     return app.run([])
 
 
@@ -137,16 +140,23 @@ def pinned_popover(title, content):
 
 
 def describe(monitor):
-    """Model, size and orientation, as shown in tooltips and the status bar."""
+    """Model, size and orientation, as shown in tooltips and the status bar.
+
+    For the span, the number of monitors and the size of the whole desktop.
+    """
     orientation = "vertical" if monitor.portrait else "horizontal"
     return [monitor.model, f"{monitor.width}x{monitor.height}", orientation]
 
 
 class Window(Gtk.ApplicationWindow):
     def __init__(self, app, monitors, daemon, start, focused, upscaler=None, layouts=None,
-                 positions=None):
+                 positions=None, span=None):
         super().__init__(application=app, title="wallframe")
         self.monitors, self.daemon, self.index = monitors, daemon, start
+        # One picture across every monitor (see span.py); None when the desktop
+        # does not say where they are. It is edited like one more monitor, last.
+        self.span = span
+        self.views = monitors + ([span] if span else [])
         self.layouts = layouts or Layouts()
         self.positions = positions or {}  # monitor name -> place on the desktop, for previews
         self.upscaler = upscaler  # None when Upscayl is not installed
@@ -190,10 +200,11 @@ class Window(Gtk.ApplicationWindow):
         # sideways rather than widening the window past a portrait screen.
         self.buttons = []
         picker = Gtk.Box(spacing=6, halign=Gtk.Align.START)
-        for i, monitor in enumerate(self.monitors):
+        for i, monitor in enumerate(self.views):
             content = Gtk.Box(spacing=6)
-            content.append(Gtk.Image(
-                icon_name="phone-symbolic" if monitor.portrait else "video-display-symbolic"))
+            icon = ("video-joined-displays-symbolic" if monitor is self.span
+                    else "phone-symbolic" if monitor.portrait else "video-display-symbolic")
+            content.append(Gtk.Image(icon_name=icon))
             button_name = Gtk.Label()
             content.append(button_name)
             button = Gtk.ToggleButton(focusable=False, child=content)
@@ -201,7 +212,10 @@ class Window(Gtk.ApplicationWindow):
             if self.buttons:
                 button.set_group(self.buttons[0])
             button.connect("toggled", self.on_pick, i)
-            button.set_tooltip_text(" · ".join(filter(None, describe(monitor))) + "  (Tab)")
+            about = " · ".join(filter(None, describe(monitor)))
+            if monitor is self.span:
+                about = f"One picture across all monitors · {about}"
+            button.set_tooltip_text(about + "  (Tab)")
             picker.append(button)
             self.buttons.append(button)
         row = Gtk.ScrolledWindow(vscrollbar_policy=Gtk.PolicyType.NEVER, hexpand=True,
@@ -209,7 +223,7 @@ class Window(Gtk.ApplicationWindow):
 
         tools = Gtk.Box(spacing=6)
         tools.append(icon_button("document-open-symbolic",
-                                 "Open another image for this monitor (O), or drop one",
+                                 "Open another image (O), or drop one",
                                  self.choose_image))
         for icon, tip, action in (
                 ("object-flip-horizontal-symbolic", "Mirror (H)", "mirror"),
@@ -438,7 +452,8 @@ class Window(Gtk.ApplicationWindow):
         box.append(rename)
         for label, action in (
                 ("Save current here", lambda: self.layout_action(
-                    self.layouts.update, layout, self.monitors, self.positions)),
+                    self.layouts.update, layout, self.monitors, self.positions,
+                    self.layout_span())),
                 ("Duplicate", lambda: self.layout_action(self.layouts.duplicate, layout)),
                 ("Delete…", lambda: self.confirm_delete_layout(layout))):
             button = Gtk.Button(label=label, focusable=False)
@@ -473,7 +488,7 @@ class Window(Gtk.ApplicationWindow):
     def save_layout(self):
         name = self.layout_name.get_text().strip() or f"Layout {len(self.layouts.all()) + 1}"
         try:
-            self.layouts.save(name, self.monitors, self.positions)
+            self.layouts.save(name, self.monitors, self.positions, self.layout_span())
         except OSError as error:
             self.flash(f"Could not save the layout: {error.strerror or error}", "error")
             return
@@ -482,13 +497,24 @@ class Window(Gtk.ApplicationWindow):
         self.fill_layouts()
         self.flash(f"Saved {name}", "success")
 
+    def layout_span(self):
+        """The span a layout saved now keeps: the one being edited, or the one the
+        monitors show, untouched; None when they show pictures of their own."""
+        if self.spanning:
+            return self.span
+        span = self.span
+        if span and span.live and not span.touched and not any(m.touched for m in self.monitors):
+            return span
+        return None
+
     def activate_layout(self, layout):
         """Shows the layout on the monitors right away, and in the editor.
 
         Monitors it does not know keep what they show; edits waiting for Apply on
         the monitors it does know are replaced by it. A picture that cannot be
         loaded leaves its monitor as it was, and a dialog says why and where the
-        picture was, since a path does not fit in the status bar.
+        picture was, since a path does not fit in the status bar. A layout saved
+        from the span also brings the span back to the editor, and opens it.
         """
         jobs = [(m, layout.monitors[m.name]) for m in self.monitors if m.name in layout.monitors]
         if not jobs:
@@ -496,6 +522,7 @@ class Window(Gtk.ApplicationWindow):
             return
 
         def done(failed):
+            self.after_layout(layout)
             if failed:
                 self.flash(f"Could not load all of {layout.name}", "error")
                 self.report(f"Could not load all of {layout.name}",
@@ -504,6 +531,30 @@ class Window(Gtk.ApplicationWindow):
                 self.flash(f"Switched to {layout.name}", "success")
 
         self.apply_monitors(jobs, layout.name, done)
+
+    def after_layout(self, layout):
+        """Puts the layout's span in the editor, when it has one for these monitors;
+        a layout without one leaves the span, which the monitors no longer show."""
+        span, saved = self.span, layout.span
+        if not span or not saved or set(saved["monitors"]) != set(span.places):
+            if self.spanning:
+                self.select(0)
+            return
+        # The monitors just read the same picture: their thumbnail saves reading it again.
+        thumb = next((m.thumb for m in self.monitors if m.image == saved["source"]), None)
+        try:
+            span.take(saved, thumb)
+        except OSError:
+            return  # its picture is gone; the monitors that could, switched
+        span.mark_applied()
+        self.remember_span()
+        self.select(self.views.index(span))
+
+    def remember_span(self):
+        try:
+            self.monitors[0].store.remember_span(self.span.snapshot())
+        except OSError as error:
+            self.flash(f"Could not save the span: {error.strerror or error}", "error")
 
     def shows_layout(self, layout):
         """True when every monitor the layout knows shows what it saved, as applied."""
@@ -573,7 +624,12 @@ class Window(Gtk.ApplicationWindow):
 
     @property
     def monitor(self):
-        return self.monitors[self.index]
+        """What is being edited: a monitor, or the span."""
+        return self.views[self.index]
+
+    @property
+    def spanning(self):
+        return self.span is not None and self.monitor is self.span
 
     @property
     def backdrop_visible(self):
@@ -617,16 +673,22 @@ class Window(Gtk.ApplicationWindow):
         return scale, (aw - monitor.width * scale) / 2, (ah - monitor.height * scale) / 2
 
     def draw(self, _area, cr, aw, ah):
+        """The image over its frames: one per monitor, so several for the span."""
         monitor = self.monitor
         framing = monitor.framing
         scale, fx, fy = self.frame()
+        frames = [(name, fx + x * scale, fy + y * scale, w * scale, h * scale)
+                  for name, x, y, w, h in monitor.frames()]
         cr.set_source_rgb(0.08, 0.08, 0.08)
         cr.paint()
 
         if not framing.covers:
-            # The fill, inside the frame only, behind the image.
+            # The fill, inside the frames only, behind the image.
             background = self.background(monitor)
             cr.save()
+            for _name, x, y, w, h in frames:
+                cr.rectangle(x, y, w, h)
+            cr.clip()
             cr.translate(fx, fy)
             fill_scale = scale * monitor.width / background.get_width()
             cr.scale(fill_scale, fill_scale)
@@ -657,28 +719,45 @@ class Window(Gtk.ApplicationWindow):
             cr.stroke()
             cr.restore()
 
-        # Dim everything outside the frame: that part will not be shown.
-        fw, fh = monitor.width * scale, monitor.height * scale
+        # Dim everything outside the frames: that part will not be shown.
         cr.set_source_rgba(0, 0, 0, 0.65)
         cr.rectangle(0, 0, aw, ah)
-        cr.rectangle(fx, fy, fw, fh)
-        cr.set_fill_rule(cairo.FILL_RULE_EVEN_ODD)  # fill the ring around the frame only
+        for _name, x, y, w, h in frames:
+            cr.rectangle(x, y, w, h)
+        cr.set_fill_rule(cairo.FILL_RULE_EVEN_ODD)  # fill around the frames only
         cr.fill()
 
         if self.show_grid:
             cr.set_source_rgba(1, 1, 1, 0.3)
             cr.set_line_width(1)
-            for k in (1, 2):
-                cr.move_to(fx + fw * k / 3, fy)
-                cr.line_to(fx + fw * k / 3, fy + fh)
-                cr.move_to(fx, fy + fh * k / 3)
-                cr.line_to(fx + fw, fy + fh * k / 3)
+            for _name, x, y, w, h in frames:
+                for k in (1, 2):
+                    cr.move_to(x + w * k / 3, y)
+                    cr.line_to(x + w * k / 3, y + h)
+                    cr.move_to(x, y + h * k / 3)
+                    cr.line_to(x + w, y + h * k / 3)
             cr.stroke()
 
         cr.set_source_rgba(1, 1, 1, 0.9)
         cr.set_line_width(2)
-        cr.rectangle(fx, fy, fw, fh)
+        for _name, x, y, w, h in frames:
+            cr.rectangle(x, y, w, h)
         cr.stroke()
+        if len(frames) > 1:
+            self.draw_names(cr, frames)
+
+    def draw_names(self, cr, frames):
+        """Each monitor's name in the corner of its frame, on a dark tag."""
+        cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+        cr.set_font_size(12)
+        for name, x, y, _w, _h in frames:
+            extents = cr.text_extents(name)
+            cr.set_source_rgba(0, 0, 0, 0.6)
+            cr.rectangle(x + 6, y + 6, extents.x_advance + 12, 20)
+            cr.fill()
+            cr.set_source_rgba(1, 1, 1, 0.95)
+            cr.move_to(x + 12, y + 20)
+            cr.show_text(name)
 
     def select(self, index):
         self.index = index
@@ -692,10 +771,12 @@ class Window(Gtk.ApplicationWindow):
 
     def refresh(self):
         """Syncs the bars with the current monitor and redraws."""
-        for monitor, button in zip(self.monitors, self.buttons):
+        for monitor, button in zip(self.views, self.buttons):
             button.name_label.set_label(f"● {monitor.name}" if monitor.touched else monitor.name)
-        self.apply_button.set_sensitive(any(m.touched for m in self.monitors))
+        self.apply_button.set_sensitive(bool(self.pending()))
         self.discard_button.set_sensitive(self.monitor.touched)
+        # The span has no other monitor to copy from: it is all of them.
+        self.copy_button.set_visible(len(self.monitors) > 1 and not self.spanning)
         self.refresh_ai()
         monitor = self.monitor
         framing = monitor.framing
@@ -803,6 +884,7 @@ class Window(Gtk.ApplicationWindow):
         self.ai_run.set_label("Cancel" if running else "Upscale")
         self.ai_run.set_css_classes(["destructive-action" if running else "suggested-action"])
         self.ai_progress.set_visible(running)
+        self.ai_all.set_visible(len(self.monitors) > 1 and not self.spanning)
         pictures = len({m.original for m in self.monitors})
         self.ai_all.set_label("All monitors · same picture, upscaled once" if pictures == 1
                               else f"All monitors · {pictures} pictures, one after another")
@@ -855,8 +937,10 @@ class Window(Gtk.ApplicationWindow):
         return False  # let the window close
 
     def upscale_targets(self):
-        """The monitors an Upscale click covers: this one, or all of them."""
-        return self.monitors if self.ai_all.get_active() else [self.monitor]
+        """The monitors an Upscale click covers: this one, or all of them; or the span."""
+        if self.spanning or not self.ai_all.get_active():
+            return [self.monitor]
+        return self.monitors
 
     def upscale(self):
         """Enlarges the targets' original images with AI, off the main thread.
@@ -1069,8 +1153,8 @@ class Window(Gtk.ApplicationWindow):
             self.help_button.set_active(not self.help_button.get_active())
         elif key == "Escape":
             self.close()
-        elif key == "Tab" and len(self.monitors) > 1:
-            self.select((self.index + 1) % len(self.monitors))
+        elif key == "Tab" and len(self.views) > 1:
+            self.select((self.index + 1) % len(self.views))
         elif key in ("Return", "KP_Enter"):
             self.apply()
         elif key in KEY_ACTIONS:
@@ -1106,11 +1190,22 @@ class Window(Gtk.ApplicationWindow):
         if not self.asking:
             self.sync_with_daemon(then=self.apply_touched)
 
+    def pending(self):
+        """What Apply writes: the edited monitors, or in the span, the span when
+        the monitors do not show it as it is."""
+        if self.spanning:
+            span = self.span
+            return [span] if span.touched or not span.live else []
+        return [m for m in self.monitors if m.touched]
+
     def apply_touched(self):
-        touched = [m for m in self.monitors if m.touched]
-        if not touched:
+        if not self.pending():
             self.flash("Nothing to apply", "warning")
             return
+        if self.spanning:
+            self.apply_span()
+            return
+        touched = self.pending()
 
         def done(failed):
             if failed:
@@ -1120,8 +1215,25 @@ class Window(Gtk.ApplicationWindow):
 
         self.apply_monitors([(m, None) for m in touched], "the changes", done)
 
+    def apply_span(self):
+        """Gives each monitor its piece of the span; a monitor that shows its piece
+        already is left alone."""
+        span = self.span
+
+        def done(failed):
+            span.mark_applied()
+            self.remember_span()
+            self.refresh()
+            if failed:
+                self.flash(f"Could not apply {'; '.join(failed)}", "error")
+            else:
+                self.flash("Applied across all monitors", "success")
+
+        self.apply_monitors(span.pieces(), "the span", done)
+
     def apply_monitors(self, jobs, what, done):
-        """Applies each (monitor, layout entry, or None for its own edits) off the main thread.
+        """Applies each (monitor, layout entry, Snapshot, or None for its own edits)
+        off the main thread.
 
         Reading the pictures and cropping them takes a second or two per monitor,
         so the window pauses with a spinner instead of freezing, and nothing edits
@@ -1136,7 +1248,8 @@ class Window(Gtk.ApplicationWindow):
             results = []  # (monitor, snapshot, crop path, error, picture that failed to load)
             for monitor, entry in jobs:
                 try:
-                    snapshot = monitor.read_snapshot(entry) if entry else None
+                    snapshot = (entry if isinstance(entry, Snapshot)
+                                else monitor.read_snapshot(entry) if entry else None)
                 except OSError as error:  # gone or unreadable: the other monitors still apply
                     results.append((monitor, None, None, error, entry["source"]))
                     continue
@@ -1171,7 +1284,7 @@ class Window(Gtk.ApplicationWindow):
             self.set_busy(None)
             self.move_backdrop.set_active(False)  # back to moving the image
             if self.upscaler:
-                in_use = {p for m in self.monitors for p in (m.image, m.upscaled) if p}
+                in_use = {p for m in self.views for p in (m.image, m.upscaled) if p}
                 self.upscaler.clean(in_use | self.monitors[0].store.images_in_use()
                                     | self.layouts.images_in_use())
             self.refresh()
@@ -1204,11 +1317,13 @@ class Window(Gtk.ApplicationWindow):
         """
         current = {output.name: output for output in self.daemon.outputs()}
         conflicts, reloaded = [], []
+        # An edited span would replace every monitor's wallpaper, so it asks too.
+        span_edited = self.spanning and self.span.touched
         for monitor in self.monitors:
             output = current.get(monitor.name)
             if not output or not monitor.changed(output.image):
                 continue
-            if monitor.touched or not render.is_still_image(output.image):
+            if monitor.touched or span_edited or not render.is_still_image(output.image):
                 if ask_postponed or (monitor.name, output.image) not in self.postponed:
                     conflicts.append((monitor, output))
             else:
@@ -1229,11 +1344,12 @@ class Window(Gtk.ApplicationWindow):
         self.asking = True
         monitor, output = conflicts[0]
         loadable = render.is_still_image(output.image)
+        detail = ("It is animated or a video, so wallframe cannot edit it." if not loadable
+                  else "Your changes on this monitor are for the previous image."
+                  if monitor.touched else "Applying the span would replace it.")
         dialog = Gtk.AlertDialog(
             message=f"{monitor.name} has a new wallpaper",
-            detail="Your changes on this monitor are for the previous image."
-                   if loadable else
-                   "It is animated or a video, so wallframe cannot edit it.",
+            detail=detail,
             buttons=["Load new wallpaper" if loadable else "Keep the new wallpaper",
                      "Keep editing (Apply will replace it)"],
             default_button=0)
@@ -1253,7 +1369,9 @@ class Window(Gtk.ApplicationWindow):
                 monitor.ignored = output.image
                 monitor.discard_edit()
             self.refresh()
-            self.ask_next(conflicts[1:], then)
+            # Kept, the new wallpaper must survive: an Apply of the span would cover it.
+            keep = choice != 1 and self.spanning
+            self.ask_next(conflicts[1:], None if keep else then)
 
         dialog.choose(self, None, answered)
 

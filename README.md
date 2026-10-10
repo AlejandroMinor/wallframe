@@ -1,6 +1,6 @@
 # wallframe
 
-Drag, zoom, mirror and rotate your wallpaper inside each monitor's frame, and save layouts for all your monitors. A GTK4 editor for awww and swww on Wayland.
+Drag, zoom, mirror and rotate your wallpaper inside each monitor's frame, or one picture across all of them, and save layouts for all your monitors. A GTK4 editor for awww and swww on Wayland.
 
 Wallpaper daemons scale the image to fill the screen and cut off the parts that do not fit. They always keep the center. On a portrait monitor, a landscape image can lose more than half of its width, and often the part you wanted to see. wallframe shows the frame of each monitor over the image, so you can choose which part to keep.
 
@@ -112,7 +112,7 @@ for_window [app_id="io.github.AlejandroMinor.wallframe"] floating enable
 | Copy from another monitor: everything, or just the fill | Toolbar | |
 | Rule-of-thirds grid | Toolbar | `G` |
 | Save or switch layouts | Layouts button | |
-| Next monitor | Monitor buttons | `Tab` |
+| Next monitor, or the span | Monitor buttons | `Tab` |
 | Apply to the marked monitors | Apply | `Enter` |
 | Show all keyboard shortcuts | Keyboard button, bottom left | `?` / `F1` |
 | Close | | `Esc` |
@@ -129,7 +129,13 @@ The **Layouts** panel saves what every monitor shows: the picture and its framin
 
 ![The Layouts panel with two saved layouts, one of them marked as the one the monitors show](docs/layouts.webp)
 
-wallframe opens on the focused monitor. To start on a different monitor, give its output name: `wallframe DP-1`.
+### One picture across all monitors
+
+The **Span** button, after the monitor buttons, frames one picture across every monitor. The canvas shows your monitors where they stand on the desk, each with its own frame, over the picture. Drag, zoom, mirror, rotate, fill and upscale work as on one monitor. Apply gives each monitor its own piece, cropped at its own resolution, so a scaled 4K monitor next to a 1080p one stays sharp and lines up. Where no monitor is, as beside a portrait monitor that stands taller than the others, nothing shows.
+
+Span needs to know where the monitors are, so it is there on Hyprland, sway and Plasma, with two monitors or more. A layout saved from the span brings the span back. Editing one monitor on its own takes that monitor out of the span; Apply on the span puts it back.
+
+wallframe opens on the focused monitor, or on the span when the monitors show it. To start on a different monitor, give its output name: `wallframe DP-1`; for the span, `wallframe span`.
 
 ## Development
 

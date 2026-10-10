@@ -9,28 +9,18 @@ PREVIEW_MAX = 2048  # longest side of the preview copy; the crop uses the origin
 Snapshot = namedtuple("Snapshot", "source original framing thumb")
 
 
-class Monitor:
-    """One monitor being edited: its size, the image and how it is framed."""
+class Picture:
+    """What the editor frames: a picture on a width x height area, and how it is framed.
 
-    def __init__(self, output, store, model=""):
-        self.store, self.model = store, model
-        self.load(output)
+    A Monitor is one; a Span (see span.py) frames one picture across all of them.
+    Subclasses set name, model, width, height, image, original, upscaled, framing
+    and thumb, then call mark_applied().
+    """
 
-    def load(self, output):
-        """Starts editing what the output shows, resuming wallframe's last framing."""
-        self.name, self.width, self.height = output.name, output.width, output.height
-        self.image, saved = self.store.resume(self.name, output.image)
-        # The picture before any AI upscaling, and the upscaled copy if there is one.
-        original = (saved or {}).get("original")
-        self.original = original if original and os.path.exists(original) else self.image
-        self.upscaled = self.image if self.image != self.original else None
-        self.framing = Framing(self.width, self.height, *render.image_size(self.image))
-        if saved:
-            self.framing.restore(saved)
-        self.thumb = render.thumbnail(self.image, PREVIEW_MAX)
-        self.shown = output.image  # the file the monitor shows
-        self.ignored = None        # a newer file the user chose to replace anyway
-        self.mark_applied()
+    def frames(self):
+        """The monitors on the area, as (name, x, y, width, height): the editor
+        draws a frame around each and dims the rest."""
+        return [(self.name, 0, 0, self.width, self.height)]
 
     def mark_applied(self):
         self.applied = self.framing.key()
@@ -39,7 +29,7 @@ class Monitor:
 
     @property
     def touched(self):
-        """True when the framing or the image differ from what the monitor shows."""
+        """True when the framing or the image differ from what was last applied."""
         return self.framing.key() != self.applied or self.image != self.applied_image
 
     def framing_for(self, path):
@@ -73,10 +63,6 @@ class Monitor:
     def portrait(self):
         return self.height > self.width
 
-    def changed(self, shown):
-        """True when the monitor now shows `shown`, set outside wallframe and not ignored."""
-        return shown not in (self.shown, self.ignored)
-
     def edit(self, action):
         """Runs "mirror", "flip", "rotate" or "reset" on the framing."""
         {"mirror": lambda: self.framing.mirror(horizontal=True),
@@ -89,23 +75,6 @@ class Monitor:
         if self.image != self.applied_image:
             self.use_image(self.applied_image)
         self.framing.restore(self.applied_framing)
-
-    def copy_from(self, other, everything=True):
-        """Takes `other`'s picture and framing, or with everything=False only its fill.
-
-        The picture comes with its upscaled copy. On a monitor of another shape,
-        what was at the center of `other` lands at the center here.
-        """
-        if not everything:
-            self.framing.fill = other.framing.fill
-            self.framing.fill_color = other.framing.fill_color
-            self.framing.blur = other.framing.blur
-            return
-        self.image, self.original, self.upscaled = other.image, other.original, other.upscaled
-        self.thumb = other.thumb  # never changed in place, so both can use it
-        self.framing = Framing(self.width, self.height,
-                               other.framing.source_w, other.framing.source_h)
-        self.framing.restore(other.framing.to_dict())  # it carries the other monitor's size
 
     def open_image(self, path):
         """Edits another picture, centered, keeping only the fill; Apply shows it.
@@ -126,6 +95,55 @@ class Monitor:
         self.image = self.original = path
         self.upscaled = None
         self.framing, self.thumb = framing, thumb
+
+    def preview(self):
+        """The thumbnail with the current mirror and rotation."""
+        return render.transform(self.thumb, self.framing)
+
+
+class Monitor(Picture):
+    """One monitor being edited: its size, the image and how it is framed."""
+
+    def __init__(self, output, store, model=""):
+        self.store, self.model = store, model
+        self.load(output)
+
+    def load(self, output):
+        """Starts editing what the output shows, resuming wallframe's last framing."""
+        self.name, self.width, self.height = output.name, output.width, output.height
+        self.image, saved = self.store.resume(self.name, output.image)
+        # The picture before any AI upscaling, and the upscaled copy if there is one.
+        original = (saved or {}).get("original")
+        self.original = original if original and os.path.exists(original) else self.image
+        self.upscaled = self.image if self.image != self.original else None
+        self.framing = Framing(self.width, self.height, *render.image_size(self.image))
+        if saved:
+            self.framing.restore(saved)
+        self.thumb = render.thumbnail(self.image, PREVIEW_MAX)
+        self.shown = output.image  # the file the monitor shows
+        self.ignored = None        # a newer file the user chose to replace anyway
+        self.mark_applied()
+
+    def changed(self, shown):
+        """True when the monitor now shows `shown`, set outside wallframe and not ignored."""
+        return shown not in (self.shown, self.ignored)
+
+    def copy_from(self, other, everything=True):
+        """Takes `other`'s picture and framing, or with everything=False only its fill.
+
+        The picture comes with its upscaled copy. On a monitor of another shape,
+        what was at the center of `other` lands at the center here.
+        """
+        if not everything:
+            self.framing.fill = other.framing.fill
+            self.framing.fill_color = other.framing.fill_color
+            self.framing.blur = other.framing.blur
+            return
+        self.image, self.original, self.upscaled = other.image, other.original, other.upscaled
+        self.thumb = other.thumb  # never changed in place, so both can use it
+        self.framing = Framing(self.width, self.height,
+                               other.framing.source_w, other.framing.source_h)
+        self.framing.restore(other.framing.to_dict())  # it carries the other monitor's size
 
     def snapshot(self):
         """What a layout keeps of this monitor: the picture and how it is framed.
@@ -182,10 +200,6 @@ class Monitor:
             return self.saved_framing(entry).key() == self.applied
         except OSError:
             return False
-
-    def preview(self):
-        """The thumbnail with the current mirror and rotation."""
-        return render.transform(self.thumb, self.framing)
 
     def apply(self, daemon):
         """Crops the original image, saves the state and shows the crop on the monitor.

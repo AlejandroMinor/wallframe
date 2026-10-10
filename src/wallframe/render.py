@@ -89,6 +89,8 @@ def shown(image, framing, size):
     source_box, target = framing.placement()
     left, top, right, bottom = (round(side * shrink) for side in target)
     canvas = background(image, framing, size)
+    if right <= left or bottom <= top:  # a span's piece the image misses entirely
+        return canvas
     piece = image.resize((max(1, right - left), max(1, bottom - top)), Image.LANCZOS,
                          box=_inside([side * scale for side in source_box], image))
     canvas.paste(piece, (left, top))

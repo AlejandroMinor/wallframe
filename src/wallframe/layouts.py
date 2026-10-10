@@ -13,10 +13,15 @@ GAP = 3                    # preview pixels between monitors that touch on the d
 
 
 class Layout:
-    """A saved set of wallpapers: for each monitor, the picture and how it is framed."""
+    """A saved set of wallpapers: for each monitor, the picture and how it is framed.
+
+    A layout saved from a span also keeps the span, so the editor can go back to it;
+    its monitors' entries are their pieces of it, so applying needs nothing else.
+    """
 
     def __init__(self, path, data):
         self.path, self.name, self.monitors = path, data["name"], data["monitors"]
+        self.span = data.get("span")  # a Span.snapshot(), or None
 
     @property
     def preview(self):
@@ -45,37 +50,39 @@ class Layouts:
                     continue
         return layouts
 
-    def save(self, name, monitors, positions=None):
+    def save(self, name, monitors, positions=None, span=None):
         """A new layout with what `monitors` show in the editor now.
 
         `positions` places them in the preview as on the desktop (see
-        compositors.position); without it they stand in a row.
+        compositors.position); without it they stand in a row. With a `span`,
+        each monitor gets its piece of it instead, and the span is kept too.
         """
         os.makedirs(self.directory, exist_ok=True)
         # The time keeps the names unique and the list in the order they were made.
         path = os.path.join(self.directory, f"{time.time_ns()}.json")
-        return self._write(path, name, {m.name: m.snapshot() for m in monitors},
-                           draw(monitors, positions or {}))
+        return self._write(path, name, entries(monitors, span),
+                           draw(monitors, positions or {}, span), snapshot(span))
 
-    def update(self, layout, monitors, positions=None):
+    def update(self, layout, monitors, positions=None, span=None):
         """Replaces what `layout` keeps with what `monitors` show now, keeping its name.
 
         Monitors it had that are not here stay as they were saved.
         """
-        entries = dict(layout.monitors, **{m.name: m.snapshot() for m in monitors})
-        return self._write(layout.path, layout.name, entries, draw(monitors, positions or {}))
+        kept = dict(layout.monitors, **entries(monitors, span))
+        return self._write(layout.path, layout.name, kept,
+                           draw(monitors, positions or {}, span), snapshot(span))
 
     def rename(self, layout, name):
-        return self._write(layout.path, name, layout.monitors)
+        return self._write(layout.path, name, layout.monitors, span=layout.span)
 
     def duplicate(self, layout):
         """A copy named "<name> (copy)", with its own preview, listed last."""
         path = os.path.join(self.directory, f"{time.time_ns()}.json")
         copy = f"{layout.name} (copy)"
         if not os.path.exists(layout.preview):
-            return self._write(path, copy, layout.monitors)
+            return self._write(path, copy, layout.monitors, span=layout.span)
         with Image.open(layout.preview) as preview:
-            return self._write(path, copy, layout.monitors, preview.copy())
+            return self._write(path, copy, layout.monitors, preview.copy(), layout.span)
 
     def delete(self, layout):
         for path in (layout.path, layout.preview):
@@ -84,12 +91,15 @@ class Layouts:
 
     def images_in_use(self):
         """Every picture a layout points at, so cleaning up never deletes one."""
-        return {path for layout in self.all() for entry in layout.monitors.values()
+        return {path for layout in self.all()
+                for entry in [*layout.monitors.values(), *filter(None, [layout.span])]
                 for path in (entry.get("source"), entry.get("original")) if path}
 
-    def _write(self, path, name, monitors, preview=None):
+    def _write(self, path, name, monitors, preview=None, span=None):
         """Saves the layout, its preview first, each written aside and swapped in."""
         data = {"name": name, "monitors": monitors}
+        if span:
+            data["span"] = span
         if preview is not None:
             _replace(path[:-len(".json")] + ".png", preview.save)
         _replace(path, lambda temporary: _dump(data, temporary))
@@ -115,10 +125,20 @@ def _replace(path, write):
         raise
 
 
-def draw(monitors, positions):
+def entries(monitors, span=None):
+    """What a layout keeps of each monitor: its snapshot, or its piece of `span`."""
+    return {m.name: span.entry(m) if span else m.snapshot() for m in monitors}
+
+
+def snapshot(span):
+    return span.snapshot() if span else None
+
+
+def draw(monitors, positions, span=None):
     """Every monitor's wallpaper in its place on the desktop, small, on transparency.
 
     Monitors without a position stand in a row to the right of the others.
+    With a `span`, each shows its piece of it.
     """
     places = {}
     right = max((x + w for x, _y, w, _h in positions.values()), default=0)
@@ -128,6 +148,7 @@ def draw(monitors, positions):
         else:
             places[monitor] = (right, 0, monitor.width, monitor.height)
             right += monitor.width
+    whole = span.preview() if span else None
     left = min(x for x, _y, _w, _h in places.values())
     top = min(y for _x, y, _w, _h in places.values())
     width = max(x + w for x, _y, w, _h in places.values()) - left
@@ -139,5 +160,9 @@ def draw(monitors, positions):
         x1, y1 = round((x - left + w) * shrink), round((y - top + h) * shrink)
         size = (max(1, x1 - x0 - GAP), max(1, y1 - y0 - GAP))
         # From the preview thumbnail: quick, and the original is never opened.
-        canvas.paste(render.shown(monitor.preview(), monitor.framing, size), (x0, y0))
+        if span:
+            shown = render.shown(whole, span.piece(monitor), size)
+        else:
+            shown = render.shown(monitor.preview(), monitor.framing, size)
+        canvas.paste(shown, (x0, y0))
     return canvas

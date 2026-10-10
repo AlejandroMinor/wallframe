@@ -6,10 +6,16 @@ import time
 # Not ~/.cache: the daemon loads the crops from here at login.
 DATA_DIR = os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"),
                         "wallframe")
+# state.json's entry for the span (see span.py), beside the monitors' own;
+# no output is named so.
+SPAN = "span"
 
 
 class Store:
-    """The crops folder and state.json: monitor -> crop, original image and framing."""
+    """The crops folder and state.json: monitor -> crop, original image and framing.
+
+    It also keeps the span last applied, under SPAN, so the editor can open on it.
+    """
 
     def __init__(self, directory=DATA_DIR):
         self.directory = directory
@@ -63,6 +69,19 @@ class Store:
         state[monitor] = {"crop": crop, "source": source, **framing.to_dict()}
         if original and original != source:
             state[monitor]["original"] = original
+        self._save(state)
+
+    def span(self):
+        """What remember_span() saved last, or None."""
+        return self.load().get(SPAN)
+
+    def remember_span(self, entry):
+        """Saves the span applied last: its picture, framing and monitors (Span.snapshot)."""
+        state = self.load()
+        state[SPAN] = entry
+        self._save(state)
+
+    def _save(self, state):
         os.makedirs(self.directory, exist_ok=True)
         # Written aside, then swapped in: opening state.json for writing would
         # empty it first, and a failure halfway would lose every monitor's entry.
