@@ -3,7 +3,7 @@ picture across all of them, then apply it."""
 
 import sys
 
-from . import desktops, render, span, upscalers, window
+from . import desktops, edid, render, span, upscalers, window
 from .layouts import Layouts
 from .commands import notify
 from .monitor import Monitor
@@ -25,7 +25,7 @@ def main():
         notify("Animated and video wallpapers cannot be adjusted.")
         return 1
 
-    across = span.make(monitors, info.positions, store.span())
+    across = span.make(monitors, info.positions, store.span(), edid.sizes())
     asked = sys.argv[1] if len(sys.argv) > 1 else None
     wanted = asked or info.focused
     start = next((i for i, m in enumerate(monitors) if m.name == wanted), 0)

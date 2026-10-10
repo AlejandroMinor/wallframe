@@ -110,9 +110,13 @@ for_window [app_id="io.github.AlejandroMinor.wallframe"] floating enable
 | Open another image for this monitor | Toolbar, or drop a file on the canvas | `O` |
 | Discard changes since the last Apply | Toolbar | `D` |
 | Copy from another monitor: everything, or just the fill | Toolbar | |
-| Rule-of-thirds grid | Toolbar | `G` |
+| Rule-of-thirds grid; in the span, also of the whole picture, and the desk's centimeters while arranging | Toolbar | `G` |
 | Save or switch layouts | Layouts button | |
 | Next monitor, or the span | Monitor buttons | `Tab` |
+| Arrange the monitors of the span as on your desk | Toolbar, in the span | `M` |
+| Put a calibration grid on the span | Toolbar, while arranging | |
+| Turn the selected monitor by its real angle | Keys, while arranging | `.` / `,` (Shift: 5°) |
+| Save or bring back where the monitors stand | Toolbar, while arranging | |
 | Apply to the marked monitors | Apply | `Enter` |
 | Show all keyboard shortcuts | Keyboard button, bottom left | `?` / `F1` |
 | Close | | `Esc` |
@@ -133,9 +137,43 @@ The **Layouts** panel saves what every monitor shows: the picture and its framin
 
 The **Span** button, after the monitor buttons, frames one picture across every monitor. The canvas shows your monitors where they stand on the desk, each with its own frame, over the picture. Drag, zoom, mirror, rotate, fill and upscale work as on one monitor. Apply gives each monitor its own piece, cropped at its own resolution, so a scaled 4K monitor next to a 1080p one stays sharp and lines up. Where no monitor is, as beside a portrait monitor that stands taller than the others, nothing shows.
 
+![The span: three monitors over one picture, with the rule of thirds of each monitor and of the whole picture](docs/span.webp)
+
+Monitors of different sizes and resolutions line up too. wallframe reads each monitor's real size from its EDID, so the picture keeps the same size across a 27" 1440p and a 24" 1080p, and a line that crosses from one to the other does not jump. The status bar says "real sizes" when it could read them all, or "desktop sizes" when it could not. To match how the monitors really stand on your desk, see [Matching the span to your desk](#matching-the-span-to-your-desk).
+
 Span needs to know where the monitors are, so it is there on Hyprland, sway and Plasma, with two monitors or more. A layout saved from the span brings the span back. Editing one monitor on its own takes that monitor out of the span; Apply on the span puts it back.
 
 wallframe opens on the focused monitor, or on the span when the monitors show it. To start on a different monitor, give its output name: `wallframe DP-1`; for the span, `wallframe span`.
+
+#### Matching the span to your desk
+
+wallframe knows two things about your monitors: where the compositor puts them, and how big each panel is. It does not know how they really stand on your desk. Three things can differ, and each one shows in a different way:
+
+| What differs | What you see across the join |
+| --- | --- |
+| **Height.** One monitor is higher or lower than the compositor says. | A line that crosses from one monitor to the next is higher on one side than on the other. |
+| **Gap.** The bezels and the space between the screens are real room that the picture does not skip. | Something that crosses the join looks pulled apart: its two halves do not meet, as if a strip had been pasted in between. |
+| **Angle.** A side monitor is turned toward you. | A straight line looks bent at the join, even when the picture is exact. |
+
+The third one is the least obvious. A monitor turned 40° looks about 25% narrower from your chair, so what is drawn on it looks squeezed. The center monitor faces you and does not. No position on a flat canvas can fix that, so wallframe has an angle for each monitor, in degrees: it stretches the picture on that monitor to cancel the squeeze (step 3 below). Each monitor has its own angle to your eyes, so one side can look right while the other looks wrong. Judge the result from your chair.
+
+All of this is done in the editor, while arranging, with the **Arrange** button or `M`. You never move the real monitors: you move their frames in the canvas.
+
+![Arranging the monitors: the desk's centimeters, the angle of each turned monitor in its tag, and the selected monitor in blue](docs/span-arrange.webp)
+
+1. **Show the guide.** Press **Calibrate**, then Apply. It draws a grid in real centimeters, a white line through the middle and two diagonals. These lines are your ruler: they should look straight across every join.
+2. **Height.** Click the frame of a side monitor in the canvas and move it with the arrow keys (1 mm each, 10 mm with Shift) until the white line is one straight line across the join. Move the outer monitors and leave the center one alone.
+3. **Angle.** If the diagonals still look bent, give that monitor an angle: `.` adds 1° and `,` removes 1° (`:` and `;` for 5°). A negative angle does the opposite. The angle also changes the separation between the monitors by itself. Step 4 fixes that.
+4. **Separation.** Your real monitors have bezels, so there is a gap between the screens. In the canvas, the distance between two frames is that gap: it decides how much of the picture is skipped between them. Move the frame of the outer monitor with the left and right arrow keys, a few millimeters at a time, until what crosses the join looks like one picture. If it gets worse, go the other way.
+5. **Save it.** The **Desk arrangements** button saves the places and the angles under a name. If a monitor moves later, bring the arrangement back with one click. Apply puts it on the monitors.
+
+Everything you do here can feel backwards, whether it is the arrow keys, dragging a frame or an angle. A frame is a window over the picture, and you move the window, not what you see on the real screen. If you move a frame down, the monitor shows a lower part of the picture, so what you see on the screen goes up. If you give a monitor more angle, its frame gets narrower, so the screen shows a smaller part of the picture and what you see looks bigger.
+
+Keep this order: height, angle, separation. Each step changes the next one, so doing them out of order means doing them twice.
+
+The angle is a simple correction. It stretches the picture but does not model perspective, so lines still bend a little toward the far edge of a turned monitor, and it is only right from one seat. `0` while arranging puts the monitors back where the compositor has them, with no angle.
+
+> **A friendly tip.** It will not be perfect, so do not chase perfection. Monitors are not as fixed as they look: you clean them, you show something to someone, you adjust them for any reason, and they never come back to the exact same place. Do not spend your time on these exact settings. A close result is enough.
 
 ## Development
 
