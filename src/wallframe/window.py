@@ -7,11 +7,12 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 gi.require_version("Pango", "1.0")
-from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
+from gi.repository import Gdk, Gio, GLib, GObject, Gtk, Pango  # noqa: E402
 
 from . import calibration, render, upscalers  # noqa: E402
 from .commands import Cancel, Cancelled  # noqa: E402
 from .framing import BLUR_RANGE, FILLS, MAX_ZOOM  # noqa: E402
+from . import aifill  # noqa: E402
 from .arrangements import Arrangements  # noqa: E402
 from .layouts import Layouts  # noqa: E402
 from .monitor import Snapshot  # noqa: E402
@@ -22,6 +23,7 @@ ICONS_DIR = os.path.join(os.path.dirname(__file__), "icons")
 MARGIN = 60  # canvas space around the frame, to see what is left out
 ZOOM_STEP = 1.1
 FLASH_MS = 3000  # how long status bar messages stay
+EXPORT_COLOR = "#00ff00"  # the empty space of an export when the fill is blur: a green no picture has
 KEY_ACTIONS = {"h": "mirror", "v": "flip", "r": "rotate", "0": "reset", "KP_0": "reset"}
 DISCARD_KEY = "d"
 ZOOM_KEYS = {"plus": ZOOM_STEP, "equal": ZOOM_STEP, "KP_Add": ZOOM_STEP,
@@ -160,6 +162,28 @@ def pinned_popover(title, content):
     return popover
 
 
+# The export menu: sections with a heading that says what they are for, and in each,
+# (label, action name).
+EXPORT_MENU = [
+    ("Export", [("Picture as it looks…", "export-picture")]),
+    ("Fill the empty space with an external AI", [
+        ("Picture and mask…", "export-fill"),
+        ("Copy the prompt", "copy-prompt"),
+    ]),
+]
+
+
+def build_menu(sections, prefix="win"):
+    """A menu from [(heading, [(label, action name)])]; each action is "<prefix>.<name>"."""
+    menu = Gio.Menu()
+    for heading, entries in sections:
+        section = Gio.Menu()
+        for label, action in entries:
+            section.append(label, f"{prefix}.{action}")
+        menu.append_section(heading, section)
+    return menu
+
+
 def describe(monitor):
     """Model, size and orientation, as shown in tooltips and the status bar.
 
@@ -276,25 +300,23 @@ class Window(Gtk.ApplicationWindow):
                                           self.on_arrange, toggle=True)
         self.arrange_button.set_visible(False)
         tools.append(self.arrange_button)
-        self.calibrate_button = icon_button("preferences-system-symbolic",
-                                            "Put a calibration image on the span, to line the monitors up",
-                                            self.calibrate)
-        self.calibrate_button.set_visible(False)
-        tools.append(self.calibrate_button)
+        self.add_callbacks({"export-picture": self.export_picture,
+                            "export-fill": self.export_for_ai,
+                            "copy-prompt": self.copy_fill_prompt})
+        self.export_button = Gtk.MenuButton(icon_name="send-to-symbolic", focusable=False,
+                                            menu_model=build_menu(EXPORT_MENU),
+                                            tooltip_text="Export")
+        tools.append(self.export_button)
         self.arrangements = Arrangements(self.monitors[0].store.directory)
-        self.arrangements_button = Gtk.MenuButton(
-            icon_name="document-save-symbolic", focusable=False,
-            tooltip_text="Save how the monitors stand, or bring back a saved one",
-            popover=self.build_arrangements_popover())
-        self.arrangements_button.set_visible(False)
-        tools.append(self.arrangements_button)
         self.grid_button = icon_button("view-grid-symbolic", "Rule-of-thirds grid (G)",
                                        self.on_grid_button, toggle=True)
         self.grid_button.set_active(self.show_grid)
         tools.append(self.grid_button)
         self.layouts_button = Gtk.MenuButton(icon_name="user-bookmarks-symbolic",
                                              focusable=False, margin_start=6,
-                                             tooltip_text="Layouts: save and switch wallpapers",
+                                             tooltip_text=("Layouts and desk: save and switch wallpapers, "
+                                                           "or how the monitors stand" if self.span
+                                                           else "Layouts: save and switch wallpapers"),
                                              popover=self.build_layouts_popover())
         tools.append(self.layouts_button)
         self.apply_button = Gtk.Button(label="Apply", focusable=False, margin_start=6,
@@ -424,7 +446,7 @@ class Window(Gtk.ApplicationWindow):
             grid.attach(control, 1, row, 1, 1)
         return pinned_popover("Upscale with AI", grid)
 
-    def build_arrangements_popover(self):
+    def build_desk_page(self):
         """Names for where the monitors stand and how they are turned: kept apart from
         the pictures, so a calibration is done once and brought back when a monitor moves."""
         self.arrangement_name = Gtk.Entry(placeholder_text="Name", hexpand=True)
@@ -436,12 +458,13 @@ class Window(Gtk.ApplicationWindow):
         row.append(self.arrangement_name)
         row.append(save)
         self.arrangement_list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        self.guide_button = Gtk.Button(label="Show the calibration guide", focusable=False)
+        self.guide_button.connect("clicked", lambda _b: self.calibrate())
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box.append(self.guide_button)
         box.append(row)
         box.append(self.arrangement_list)
-        popover = pinned_popover("Desk arrangements", box)
-        popover.connect("show", lambda _p: self.fill_arrangements())
-        return popover
+        return box
 
     def fill_arrangements(self):
         """One row per arrangement saved for these monitors: its name brings it back."""
@@ -523,7 +546,18 @@ class Window(Gtk.ApplicationWindow):
         for widget in (row, self.layout_empty, scroll):
             box.append(widget)
         self.fill_layouts()
-        return pinned_popover("Layouts", box)
+        if not self.span:  # the desk needs the span, which needs to know where the monitors are
+            return pinned_popover("Layouts", box)
+        # Each tab as big as it needs: the desk is a short list, the layouts are cards.
+        stack = Gtk.Stack(hhomogeneous=False, vhomogeneous=False)
+        stack.add_titled(box, "layouts", "Layouts")
+        stack.add_titled(self.build_desk_page(), "desk", "Desk")
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        content.append(Gtk.StackSwitcher(stack=stack, halign=Gtk.Align.CENTER))
+        content.append(stack)
+        popover = pinned_popover("Saved", content)
+        popover.connect("show", lambda _p: self.fill_arrangements())
+        return popover
 
     def fill_layouts(self):
         """One card per layout: click it to apply, ⋯ to rename, update, copy or delete."""
@@ -714,6 +748,95 @@ class Window(Gtk.ApplicationWindow):
             grid.attach(control, 1, row, 1, 1)
         grid.attach(self.move_backdrop, 0, 3, 2, 1)
         return pinned_popover("Around the image", grid)
+
+    def add_callbacks(self, callbacks):
+        """Makes each {name: function} a window action, for menus to point at as "win.<name>"."""
+        for name, callback in callbacks.items():
+            action = Gio.SimpleAction.new(name, None)
+            action.connect("activate", lambda _a, _p, callback=callback: callback())
+            self.add_action(action)
+
+    def export_color(self, framing):
+        """The color the empty space has in an export for an AI: the fill color, or a green
+        when the fill is blur."""
+        return framing.fill_color if framing.fill == "color" else EXPORT_COLOR
+
+    def copy_fill_prompt(self):
+        """Puts the text to give an image AI on the clipboard, with this color and size."""
+        framing = self.monitor.export_framing()
+        if framing.covers:
+            self.flash("Nothing to fill: zoom out to leave empty space first", "warning")
+            return
+        text = aifill.prompt(self.export_color(framing), framing.monitor_w, framing.monitor_h,
+                             framing.placement()[1])
+        value = GObject.Value()
+        value.init(GObject.TYPE_STRING)
+        value.set_string(text)
+        self.get_clipboard().set_content(Gdk.ContentProvider.new_for_value(value))
+        self.flash("Prompt copied · paste it in your external AI, with the picture and its mask",
+                   "success")
+
+    def ask_export(self, title, name, write, done):
+        """Asks where to save a PNG, runs write(path) off the main thread, and says how it
+        went: done(path) is the message when it worked."""
+        dialog = Gtk.FileDialog(title=title, initial_name=name, modal=False,
+                                initial_folder=Gio.File.new_for_path(
+                                    os.path.dirname(self.monitor.original)))
+
+        def chosen(dialog, result):
+            try:
+                path = dialog.save_finish(result).get_path()
+            except GLib.Error:  # cancelled
+                return
+            if not path.lower().endswith(".png"):
+                path += ".png"
+
+            def work():
+                try:
+                    write(path)
+                except (OSError, ValueError) as error:
+                    return error
+
+            def then(error):
+                if error:
+                    self.flash(f"Could not export: {getattr(error, 'strerror', None) or error}",
+                               "error")
+                else:
+                    self.flash(done(path), "success")
+
+            self.in_background(work, then)
+
+        dialog.save(self, None, chosen)
+
+    def export_picture(self):
+        """Saves what is on the canvas, as it will look, with its fill: for using it elsewhere."""
+        monitor = self.monitor
+        framing, source = monitor.export_framing(), monitor.image
+        self.ask_export("Export the picture", f"wallframe-{monitor.name.lower()}.png",
+                        lambda path: render.compose(source, framing).save(path),
+                        lambda path: f"Saved {os.path.basename(path)}")
+
+    def export_for_ai(self):
+        """Saves the picture with its empty space in one color, and a mask of it, so an image
+        AI can be asked to fill that space; the result opens like any picture."""
+        monitor = self.monitor
+        framing = monitor.export_framing()
+        if framing.covers:
+            self.flash("Nothing to fill: zoom out to leave empty space first", "warning")
+            return
+        color, source = self.export_color(framing), monitor.image
+
+        def write(path):
+            picture, mask = render.export_for_fill(source, framing, color)
+            picture.save(path)
+            mask.save(path[:-4] + "-mask.png")
+
+        self.ask_export(
+            "Export the picture and its mask, to fill the empty space",
+            f"wallframe-fill-{monitor.name.lower()}.png", write,
+            lambda path: f"Saved {os.path.basename(path)} and its mask · ask an AI to fill the "
+                         f"{color} area (a color not in the picture works best), then open "
+                         "the result (O)")
 
     def connect_input(self):
         drag = Gtk.GestureDrag()
@@ -979,8 +1102,11 @@ class Window(Gtk.ApplicationWindow):
         # The span has no other monitor to copy from: it is all of them.
         self.copy_button.set_visible(len(self.monitors) > 1 and not self.spanning)
         self.arrange_button.set_visible(self.spanning)
-        self.calibrate_button.set_visible(self.arranging)
-        self.arrangements_button.set_visible(self.arranging)
+        if self.span:  # the guide goes on the span, which is for arranging
+            self.guide_button.set_sensitive(self.arranging)
+            self.guide_button.set_tooltip_text(
+                "Put a grid, numbered lines and diagonals on the span, to line the monitors up by"
+                if self.arranging else "Available while arranging the monitors (M)")
         self.refresh_ai()
         monitor = self.monitor
         framing = monitor.framing
@@ -1436,8 +1562,7 @@ class Window(Gtk.ApplicationWindow):
         key = Gdk.keyval_name(Gdk.keyval_to_lower(keyval))
         if isinstance(self.get_focus(), Gtk.Editable) and key != "Escape":
             return False  # typing a layout's name: H, R or Enter are letters, not actions
-        open_panel = next((b for b in (self.fill_button, self.help_button, self.layouts_button,
-                                       self.arrangements_button)
+        open_panel = next((b for b in (self.fill_button, self.help_button, self.layouts_button)
                            if b.get_active()), None)
         if key == "Escape" and open_panel:
             open_panel.popdown()  # Esc closes the panel, not the whole window

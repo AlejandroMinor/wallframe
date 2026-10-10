@@ -114,15 +114,15 @@ for_window [app_id="io.github.AlejandroMinor.wallframe"] floating enable
 | Save or switch layouts | Layouts button | |
 | Next monitor, or the span | Monitor buttons | `Tab` |
 | Arrange the monitors of the span as on your desk | Toolbar, in the span | `M` |
-| Put a calibration grid on the span | Toolbar, while arranging | |
+| Show the calibration guide on the span | Layouts panel, Desk tab, while arranging | |
 | Turn the selected monitor by its real angle | Keys, while arranging | `.` / `,` (Shift: 5°) |
 | Tilt the selected monitor up or down | Keys, while arranging | `<` / `>` |
-| Save or bring back where the monitors stand | Toolbar, while arranging | |
+| Save or bring back where the monitors stand | Layouts panel, Desk tab | |
 | Apply to the marked monitors | Apply | `Enter` |
 | Show all keyboard shortcuts | Keyboard button, bottom left | `?` / `F1` |
 | Close | | `Esc` |
 
-Zoom below 100% to see more of the image, or to make it smaller than the monitor. The empty space around it is filled with a copy of the image, blurred as much as you like, or with a color. Both are in the **Fill** panel of the bottom bar. Check **Move background** there (or press `B`) to drag and zoom that copy instead of the image.
+Zoom below 100% to see more of the image, or to make it smaller than the monitor. The empty space around it is filled with a copy of the image, blurred as much as you like, or with a color. Both are in the **Fill** panel of the bottom bar. Check **Move background** there (or press `B`) to drag and zoom that copy instead of the image. The **Export** button (the arrow in the top bar) has two ways out. **Export > Picture as it looks** saves exactly what is on the canvas, with its fill, to use it elsewhere. **Fill the empty space with an external AI** is for when you would rather let an image AI paint the empty space: **Picture and mask** saves the picture with the empty space in your fill color (bright green when the fill is blur), and a mask of that space; **Copy the prompt** copies a ready text with that color and the size of the picture. Give the AI the text and both files, and open the result with `O`. Pick a fill color that is not in the picture, so the AI can tell them apart. An AI may retouch your picture, for example a text. If it must stay exact, use a tool that respects the mask: it fills only the white area. If the picture leaves no empty space, there is nothing to fill, and wallframe says so.
 
 ![A landscape picture zoomed out on a portrait monitor, with the empty space filled by a blurred copy](docs/fill.webp)
 
@@ -162,11 +162,11 @@ All of this is done in the editor, while arranging, with the **Arrange** button 
 
 ![Arranging the monitors: the desk's centimeters, the angle of each turned monitor in its tag, and the selected monitor in blue](docs/span-arrange.webp)
 
-1. **Show the guide.** Press **Calibrate**, then Apply. It draws a grid in real centimeters, a white line through the middle and two diagonals. These lines are your ruler: they should look straight across every join.
+1. **Show the guide.** Open the **Layouts** panel (the bookmark), go to its **Desk** tab, press **Show the calibration guide**, then Apply. It draws a grid in real centimeters, a white line through the middle and two diagonals. These lines are your ruler: they should look straight across every join.
 2. **Height.** Click the frame of a side monitor in the canvas and move it with the arrow keys (1 mm each, 10 mm with Shift) until the white line is one straight line across the join. Move the outer monitors and leave the center one alone.
 3. **Angle.** If the diagonals still look bent, give that monitor an angle: `.` adds 1° and `,` removes 1° (`:` and `;` for 5°). A negative angle does the opposite. If a monitor leans back or forward, `<` and `>` do the same up and down. The angle also changes the separation between the monitors by itself. Step 4 fixes that.
 4. **Separation.** Your real monitors have bezels, so there is a gap between the screens. In the canvas, the distance between two frames is that gap: it decides how much of the picture is skipped between them. Move the frame of the outer monitor with the left and right arrow keys, a few millimeters at a time, until what crosses the join looks like one picture. If it gets worse, go the other way.
-5. **Save it.** The **Desk arrangements** button saves the places and the angles under a name. If a monitor moves later, bring the arrangement back with one click. Apply puts it on the monitors.
+5. **Save it.** The **Desk** tab of the Layouts panel saves the places and the angles under a name. If a monitor moves later, bring the arrangement back with one click. Apply puts it on the monitors.
 
 Everything you do here can feel backwards, whether it is the arrow keys, dragging a frame or an angle. A frame is a window over the picture, and you move the window, not what you see on the real screen. If you move a frame down, the monitor shows a lower part of the picture, so what you see on the screen goes up. If you give a monitor more angle, its frame gets narrower, so the screen shows a smaller part of the picture and what you see looks bigger.
 

@@ -234,6 +234,12 @@ class Span(Picture):
                           y + (h - narrow_h) / 2 - self.top, narrow_w, narrow_h))
         return shown
 
+    def export_framing(self):
+        """The framing of the whole box, at the resolution of the densest monitor."""
+        scale = max(m.width / self.places[m.name][2] for m in self.monitors)
+        return self.framing.piece(0, 0, self.width, self.height,
+                                  round(self.width * scale), round(self.height * scale))
+
     def arrangement(self):
         """Where the monitors stand and how they are turned, to keep by name."""
         return {"monitors": sorted(self.places),

@@ -101,6 +101,30 @@ def shown(image, framing, size):
     return canvas
 
 
+def export_for_fill(source, framing, color):
+    """The picture as the framing places it, on a canvas of the monitor's size, with the
+    empty space in `color`, and a mask of that space: white where another tool should
+    paint (inpainting). Returns (picture, mask).
+
+    Raises ValueError when the picture covers the monitor and nothing is left to fill.
+    """
+    if framing.covers:
+        raise ValueError("nothing to fill")
+    size = (framing.monitor_w, framing.monitor_h)
+    picture, mask = Image.new("RGB", size, color), Image.new("L", size, 255)
+    with Image.open(source) as img:
+        image = transform(img.convert("RGB"), framing)
+        scale = image.width / framing.image_w
+        source_box, target = framing.placement()
+        left, top, right, bottom = target
+        if right > left and bottom > top:
+            piece = image.resize((right - left, bottom - top), Image.LANCZOS,
+                                 box=_inside([side * scale for side in source_box], image))
+            picture.paste(piece, (left, top))
+            mask.paste(0, (left, top, right, bottom))
+    return picture, mask
+
+
 def crop(source, framing, destination):
     """Saves what the monitor will show, at its exact size, gaps filled."""
     compose(source, framing).save(destination)

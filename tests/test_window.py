@@ -18,7 +18,7 @@ from wallframe.daemons import Daemon, Output  # noqa: E402
 from wallframe.layouts import Layouts  # noqa: E402
 from wallframe.monitor import Monitor  # noqa: E402
 from wallframe.state import Store  # noqa: E402
-from wallframe.window import NUDGE, NUDGE_SHIFT, Window  # noqa: E402
+from wallframe.window import EXPORT_MENU, NUDGE, NUDGE_SHIFT, Window, build_menu  # noqa: E402
 from gi.repository import Gdk, Gtk  # noqa: E402
 
 NO_DAEMON = "wallframe-no-existe-este-programa"
@@ -81,7 +81,6 @@ class StandIn:
         self.grid_button = Widget()
         self.layouts_button = Widget()
         self.arrange_button = Widget()
-        self.arrangements_button = Widget()
         self.dragged = self.held = self.selected = None
         self.syncing = False
         self.layouts = (Layouts(os.path.join(monitors[0].store.directory, "layouts"))
@@ -626,3 +625,33 @@ def test_tab_reaches_the_span_after_the_monitors(tmp_path):
     window.index = 1
     assert key(window, "Tab") is True and window.monitor is window.span
     assert key(window, "Tab") is True and window.index == 0
+
+
+def test_a_menu_is_built_from_its_description():
+    menu = build_menu([("First", [("One", "one")]), ("Second", [("Two", "two"), ("Three", "three")])])
+    assert menu.get_n_items() == 2
+    second = menu.get_item_link(1, "section")
+    assert second.get_n_items() == 2
+    assert second.get_item_attribute_value(1, "action").get_string() == "win.three"
+    assert second.get_item_attribute_value(0, "label").get_string() == "Two"
+    exports = build_menu(EXPORT_MENU)                    # the one the window shows
+    assert exports.get_n_items() == len(EXPORT_MENU)
+
+
+def window_names():
+    """(attributes the window assigns on itself, methods it defines), read from its source."""
+    import ast
+    tree = ast.parse(open(os.path.join(os.path.dirname(__file__), "..", "src", "wallframe",
+                                       "window.py")).read())
+    window = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Window")
+    methods = {n.name for n in window.body if isinstance(n, ast.FunctionDef)}
+    attributes = {t.attr for n in ast.walk(window) if isinstance(n, ast.Assign)
+                  for t in n.targets if isinstance(t, ast.Attribute)
+                  and isinstance(t.value, ast.Name) and t.value.id == "self"}
+    return attributes, methods
+
+
+def test_no_attribute_of_the_window_hides_one_of_its_methods():
+    """self.x = widget would replace def x: the method then fails with 'not callable'."""
+    attributes, methods = window_names()
+    assert not attributes & methods, sorted(attributes & methods)

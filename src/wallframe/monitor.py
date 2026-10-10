@@ -96,6 +96,10 @@ class Picture:
         self.upscaled = None
         self.framing, self.thumb = framing, thumb
 
+    def export_framing(self):
+        """The framing to export for filling its empty space: at the size of the monitor."""
+        return self.framing
+
     def preview(self):
         """The thumbnail with the current mirror and rotation."""
         return render.transform(self.thumb, self.framing)

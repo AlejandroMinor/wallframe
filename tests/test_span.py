@@ -433,3 +433,24 @@ def test_the_gaps_say_how_far_each_neighbor_is(tmp_path):
     assert whole.gaps("DP-2")["left"][1] == -20          # overlapping
     whole.move_monitor("DP-2", 230, 120)                 # entirely below: no neighbor
     assert whole.gaps("DP-2") == {}
+
+
+def test_the_picture_can_be_exported_with_its_empty_space_in_a_color(tmp_path):
+    image = tmp_path / "red.png"
+    Image.new("RGB", (100, 100), (200, 50, 50)).save(image)
+    framing = Framing(400, 100, 100, 100)
+    with pytest.raises(ValueError):                       # it covers the monitor: nothing to fill
+        render.export_for_fill(str(image), framing, "#00ff00")
+    framing.zoom, framing.x, framing.y = framing.fit_zoom, 150, 0     # smaller, in the middle
+    picture, mask = render.export_for_fill(str(image), framing, "#00ff00")
+    assert picture.size == mask.size == (400, 100)
+    assert picture.getpixel((200, 50)) == (200, 50, 50) and mask.getpixel((200, 50)) == 0
+    assert picture.getpixel((10, 50)) == (0, 255, 0) and mask.getpixel((10, 50)) == 255
+
+
+def test_the_span_exports_at_the_resolution_of_its_densest_monitor(tmp_path):
+    monitors, positions = two_monitors(tmp_path, right=(400, 200))   # DP-2 has 2 pixels per unit
+    whole = span.make(monitors, positions)
+    framing = whole.export_framing()
+    assert (framing.monitor_w, framing.monitor_h) == (whole.width * 2, whole.height * 2)
+    assert monitors[0].export_framing() is monitors[0].framing
