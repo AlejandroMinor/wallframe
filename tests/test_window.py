@@ -81,7 +81,9 @@ class StandIn:
         self.grid_button = Widget()
         self.layouts_button = Widget()
         self.arrange_button = Widget()
-        self.dragged = self.held = None
+        self.arrangements_button = Widget()
+        self.dragged = self.held = self.selected = None
+        self.syncing = False
         self.layouts = (Layouts(os.path.join(monitors[0].store.directory, "layouts"))
                         if monitors else None)
         self.positions = {}
@@ -533,6 +535,44 @@ def test_the_span_gives_every_monitor_its_piece(tmp_path):
     assert window.flashed[-1] == ("success", "Applied across all monitors")
     Window.apply_touched(window)
     assert window.flashed[-1] == ("warning", "Nothing to apply")
+
+
+def arranging(window):
+    window.arrange_button.set_active(True)
+    Window.on_arrange(window)
+
+
+def test_the_arrows_move_the_selected_monitor_while_arranging(tmp_path):
+    window = spanning(tmp_path)
+    arranging(window)
+    assert window.selected == "DP-1"                    # the first, until another is clicked
+    window.selected = "DP-2"
+    assert key(window, "Down") is True
+    assert window.span.places["DP-2"][:2] == (200, NUDGE)  # span units: no real sizes here
+    assert window.span.places["DP-1"][:2] == (0, 0)
+    assert window.span.touched                          # waits for Apply like a drag
+    window.arrange_button.set_active(False)
+    Window.on_arrange(window)
+    assert window.selected is None
+
+
+def test_the_arrows_move_by_millimeters_when_the_sizes_are_real(tmp_path):
+    window = spanning(tmp_path)
+    window.span.units_per_mm = 2  # as if every millimeter were two span units
+    arranging(window)
+    window.selected = "DP-2"
+    assert key(window, "Right") is True
+    assert window.span.places["DP-2"][0] == 200 + 2          # 1 mm
+    assert key(window, "Right", Gdk.ModifierType.SHIFT_MASK) is True
+    assert window.span.places["DP-2"][0] == 200 + 2 + 20     # 10 mm more
+    assert Window.gap_text(window) == " · gap 11 mm to left"
+
+
+def test_mirror_and_rotate_say_why_they_wait_while_arranging(tmp_path):
+    window = spanning(tmp_path)
+    arranging(window)
+    assert key(window, "h") is True
+    assert window.flashed[-1][0] == "warning" and not window.span.framing.flip_h
 
 
 def test_a_span_not_on_the_monitors_can_be_applied_unedited(tmp_path):

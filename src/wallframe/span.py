@@ -1,5 +1,6 @@
 """One picture across every monitor, placed as the monitors stand on the desk."""
 
+import math
 import os
 
 from . import render
@@ -7,6 +8,7 @@ from .framing import Framing
 from .monitor import PREVIEW_MAX, Picture, Snapshot
 
 ASPECT_SLACK = 0.1  # an EDID size this far off the monitor's shape is not trusted
+YAW_LIMIT = 75      # degrees either way: past this a monitor shows next to nothing
 ALIGNED = 2         # logical pixels: edges this close count as lined up on the desktop
 
 
@@ -118,9 +120,13 @@ class Span(Picture):
         """`saved` is a snapshot() to resume; without it, the first monitor's picture."""
         self.monitors = monitors
         self.default = desk(monitors, positions, sizes)
-        self.real_sizes = real_widths(monitors, sizes) is not None
+        widths = real_widths(monitors, sizes)
+        self.real_sizes = widths is not None
+        first = monitors[0].name
+        self.units_per_mm = self.default[first][2] / widths[first] if widths else None
         self.model = f"{len(monitors)} monitors"
         self.places = dict(self.default)
+        self.yaws = {}  # name -> degrees a monitor is turned toward the viewer
         self.bound()
         if saved:
             try:
@@ -128,10 +134,23 @@ class Span(Picture):
             except (KeyError, OSError):  # its picture is gone, or cannot be read
                 saved = None
         if not saved:
-            first = monitors[0]
-            self.image, self.original, self.upscaled = first.image, first.original, first.upscaled
-            self.framing = Framing(self.width, self.height, *render.image_size(self.image))
-            self.thumb = first.thumb  # never changed in place, so both can use it
+            self.follow(monitors[0])
+        self.mark_applied()
+        if saved and not self.live:  # the monitors show something else by now
+            self.follow(monitors[0])
+
+    def follow(self, monitor):
+        """Edits the picture `monitor` shows, where the monitors stand as they are.
+
+        The fill stays as it was, like when another image is opened.
+        """
+        previous = getattr(self, "framing", None)
+        self.image, self.original, self.upscaled = monitor.image, monitor.original, monitor.upscaled
+        self.framing = Framing(self.width, self.height, *render.image_size(self.image))
+        if previous:
+            self.framing.fill, self.framing.fill_color, self.framing.blur = (
+                previous.fill, previous.fill_color, previous.blur)
+        self.thumb = monitor.thumb  # never changed in place, so both can use it
         self.mark_applied()
 
     def bound(self):
@@ -155,8 +174,11 @@ class Span(Picture):
         if set(places) == set(self.places):  # the sizes come from the monitors, as now
             self.places = {name: (*places[name][:2], *self.default[name][2:])
                            for name in self.places}
+            self.yaws = {name: angle for name, angle in saved.get("yaws", {}).items()
+                         if name in self.places and angle}
         else:
             self.places = dict(self.default)
+            self.yaws = {}
         self.bound()
         framing = Framing(self.width, self.height, *size)
         framing.restore(saved)  # on another arrangement, its center stays at the center
@@ -172,6 +194,8 @@ class Span(Picture):
         entry = {"source": self.image, "monitors": [m.name for m in self.monitors],
                  "places": {name: list(place) for name, place in self.places.items()},
                  **self.framing.to_dict()}
+        if self.yaws:
+            entry["yaws"] = dict(self.yaws)
         if self.original != self.image:
             entry["original"] = self.original
         return entry
@@ -183,9 +207,52 @@ class Span(Picture):
             entry["original"] = self.original
         return entry
 
+    def squeeze(self, name):
+        """The share of its width a turned monitor shows: under 1 when it is turned toward
+        the viewer, so it is stretched across the screen; over 1 when it is turned away."""
+        degrees = self.yaws.get(name, 0)
+        cosine = math.cos(math.radians(abs(degrees)))
+        return cosine if degrees >= 0 else 1 / cosine
+
     def frames(self):
-        return [(name, x - self.left, y - self.top, w, h)
-                for name, (x, y, w, h) in self.places.items()]
+        """(name, x, y, width, height) of what each monitor shows, in the box: a turned
+        monitor shows the middle of its width."""
+        shown = []
+        for name, (x, y, w, h) in self.places.items():
+            narrow = w * self.squeeze(name)
+            shown.append((name, x + (w - narrow) / 2 - self.left, y - self.top, narrow, h))
+        return shown
+
+    def arrangement(self):
+        """Where the monitors stand and how they are turned, to keep by name."""
+        return {"monitors": sorted(self.places),
+                "places": {name: list(place) for name, place in self.places.items()},
+                "yaws": dict(self.yaws)}
+
+    def use_arrangement(self, entry):
+        """Stands the monitors as `entry` (see arrangement()) says, keeping the picture
+        where it is. False when it is not for these monitors."""
+        try:
+            if sorted(entry["monitors"]) != sorted(self.places):
+                return False
+            places = {name: (*entry["places"][name][:2], *self.default[name][2:])
+                      for name in self.places}
+        except (KeyError, TypeError, ValueError):
+            return False
+        self.yaws = {name: angle for name, angle in entry.get("yaws", {}).items()
+                     if name in places and angle}
+        self.arrange(places)
+        self.settle()
+        return True
+
+    def set_yaw(self, name, degrees):
+        """Turns a monitor by `degrees`, -75 to 75: toward the viewer when positive, away
+        when negative."""
+        degrees = min(max(round(degrees), -YAW_LIMIT), YAW_LIMIT)
+        if degrees:
+            self.yaws[name] = degrees
+        else:
+            self.yaws.pop(name, None)
 
     def piece(self, monitor, framing=None, places=None):
         """The framing `monitor` shows of the span, or of `framing` with the
@@ -195,7 +262,8 @@ class Span(Picture):
         top = min(y for _x, y, _w, _h in places.values())
         x, y, w, h = places[monitor.name]
         return (framing or self.framing).piece(x - left, y - top, w, h,
-                                               monitor.width, monitor.height)
+                                               monitor.width, monitor.height,
+                                               self.squeeze(monitor.name))
 
     def pieces(self):
         """[(monitor, Snapshot)]: what Apply hands each monitor."""
@@ -207,8 +275,23 @@ class Span(Picture):
         _x, _y, w, h = self.places[name]
         self.arrange({**self.places, name: (x, y, w, h)})
 
+    def gaps(self, name):
+        """{"left": (other, distance), "right": ...}: the nearest monitor on each side of
+        `name` that stands at some of its height, and how far its edge is, in span
+        units; negative when they overlap."""
+        x, y, w, h = self.places[name]
+        found = {}
+        for other, (ox, oy, ow, oh) in self.places.items():
+            if other == name or oy >= y + h or oy + oh <= y:
+                continue
+            side, distance = (("right", ox - (x + w)) if ox >= x else ("left", x - (ox + ow)))
+            if side not in found or distance < found[side][1]:
+                found[side] = (other, distance)
+        return found
+
     def reset_places(self):
-        """Back to the sizes and places the desktop and the EDIDs give."""
+        """Back to the sizes and places the desktop and the EDIDs give, and no one turned."""
+        self.yaws = {}
         self.arrange(dict(self.default))
         self.settle()
 
@@ -240,6 +323,7 @@ class Span(Picture):
         tell it shows them."""
         super().mark_applied()
         self.applied_places = dict(self.places)
+        self.applied_yaws = dict(self.yaws)
         whole = Framing(self.width, self.height, self.framing.source_w, self.framing.source_h)
         whole.restore(self.applied_framing)
         self.applied_pieces = {m.name: self.piece(m, whole).key() for m in self.monitors}
@@ -247,10 +331,12 @@ class Span(Picture):
     @property
     def touched(self):
         """Moving a monitor changes every piece, so it waits for Apply too."""
-        return super().touched or self.places != self.applied_places
+        return (super().touched or self.places != self.applied_places
+                or self.yaws != self.applied_yaws)
 
     def discard_edit(self):
         """Puts the monitors back where they were applied, then the picture."""
+        self.yaws = dict(self.applied_yaws)
         self.arrange(dict(self.applied_places))
         super().discard_edit()
 

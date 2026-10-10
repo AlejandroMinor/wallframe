@@ -315,6 +315,8 @@ def test_the_places_come_back_with_the_span(tmp_path):
     monitors = desk_monitors(tmp_path)
     whole = span.make(monitors, DESK, sizes=MM)
     whole.move_monitor("DP-2", 2700, 150)
+    apply(whole, FakeDaemon())  # the monitors show it, so it is the span that comes back
+    whole.mark_applied()
     saved = whole.snapshot()
     again = span.make(monitors, DESK, saved, MM)
     assert again.places["DP-2"][:2] == (2700, 150)
@@ -322,3 +324,75 @@ def test_the_places_come_back_with_the_span(tmp_path):
     # Saved for other monitors, the places are left out.
     saved["places"] = {"HDMI-A-1": [0, 0, 10, 10]}
     assert span.make(monitors, DESK, saved, MM).places == whole.default
+
+
+def test_a_turned_monitor_shows_the_middle_of_its_width(tmp_path):
+    monitors, positions = two_monitors(tmp_path)
+    whole = span.make(monitors, positions)
+    assert whole.squeeze("DP-2") == 1
+    whole.set_yaw("DP-2", 60)
+    assert whole.squeeze("DP-2") == pytest.approx(0.5)
+    frames = {name: (x, w) for name, x, _y, w, _h in whole.frames()}
+    assert frames["DP-2"] == pytest.approx((250 - whole.left, 100))   # the middle half of 200..400
+    assert frames["DP-1"] == (0, 200)
+    assert whole.touched                                 # waits for Apply, like a move
+    again = span.make(monitors, positions, whole.snapshot())
+    assert again.yaws == {"DP-2": 60}
+    whole.discard_edit()
+    assert not whole.yaws and not whole.touched
+    whole.set_yaw("DP-2", 200)
+    assert whole.yaws["DP-2"] == span.YAW_LIMIT
+    whole.set_yaw("DP-2", -60)                           # the other way: twice as much, squeezed
+    assert whole.squeeze("DP-2") == pytest.approx(2)
+    assert whole.set_yaw("DP-2", -200) is None and whole.yaws["DP-2"] == -span.YAW_LIMIT
+    whole.reset_places()
+    assert not whole.yaws
+
+
+def test_a_turned_monitor_stretches_its_middle_across_the_screen(tmp_path):
+    ramp = tmp_path / "ramp.png"                        # brightness grows with x, 0 to 255
+    img = Image.new("RGB", (400, 100))
+    img.putdata([(x * 255 // 399,) * 3 for _y in range(100) for x in range(400)])
+    img.save(ramp)
+    monitors, positions = two_monitors(tmp_path, image=str(ramp))
+    whole = span.make(monitors, positions)
+    flat = render.compose(str(ramp), whole.piece(monitors[1]))
+    assert flat.getpixel((0, 50))[0] == pytest.approx(128, abs=2)      # DP-2 shows x 200..400
+    assert flat.getpixel((199, 50))[0] == pytest.approx(255, abs=2)
+    whole.set_yaw("DP-2", 60)
+    turned = render.compose(str(ramp), whole.piece(monitors[1]))
+    assert turned.size == flat.size == (200, 100)                      # still the whole screen
+    assert turned.getpixel((0, 50))[0] == pytest.approx(159, abs=3)    # x 250..350, stretched
+    assert turned.getpixel((199, 50))[0] == pytest.approx(223, abs=3)
+    whole.set_yaw("DP-2", -60)                     # x 100..500: twice its width, squeezed in
+    away = render.compose(str(ramp), whole.piece(monitors[1]))
+    assert away.size == (200, 100)
+    assert away.getpixel((0, 50))[0] == pytest.approx(64, abs=3)       # x 100 of 400
+
+
+def test_a_span_the_monitors_no_longer_show_follows_them(tmp_path):
+    monitors = desk_monitors(tmp_path)
+    whole = span.make(monitors, DESK, sizes=MM)
+    whole.move_monitor("DP-2", 2700, 150)
+    saved = whole.snapshot()
+    elsewhere = stripes(tmp_path / "elsewhere.png", (300, 120))
+    for monitor in monitors:
+        monitor.open_image(elsewhere)
+        monitor.mark_applied()
+    again = span.make(monitors, DESK, saved, MM)
+    assert again.image == elsewhere                      # what the monitors show, not the old one
+    assert again.places["DP-2"][:2] == (2700, 150)       # but where they stand is kept
+    again.follow(monitors[1])
+    assert again.image == monitors[1].image
+
+
+def test_the_gaps_say_how_far_each_neighbor_is(tmp_path):
+    monitors, positions = two_monitors(tmp_path)
+    whole = span.make(monitors, positions)
+    assert whole.gaps("DP-1") == {"right": ("DP-2", 0)}
+    whole.move_monitor("DP-2", 230, 0)
+    assert whole.gaps("DP-2") == {"left": ("DP-1", 30)}
+    whole.move_monitor("DP-2", 180, 0)
+    assert whole.gaps("DP-2")["left"][1] == -20          # overlapping
+    whole.move_monitor("DP-2", 230, 120)                 # entirely below: no neighbor
+    assert whole.gaps("DP-2") == {}

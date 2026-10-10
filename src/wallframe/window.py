@@ -9,9 +9,10 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("Pango", "1.0")
 from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
-from . import render, upscalers  # noqa: E402
+from . import calibration, render, upscalers  # noqa: E402
 from .commands import Cancel, Cancelled  # noqa: E402
 from .framing import BLUR_RANGE, FILLS, MAX_ZOOM  # noqa: E402
+from .arrangements import Arrangements  # noqa: E402
 from .layouts import Layouts  # noqa: E402
 from .monitor import Snapshot  # noqa: E402
 
@@ -26,13 +27,16 @@ DISCARD_KEY = "d"
 ZOOM_KEYS = {"plus": ZOOM_STEP, "equal": ZOOM_STEP, "KP_Add": ZOOM_STEP,
              "minus": 1 / ZOOM_STEP, "KP_Subtract": 1 / ZOOM_STEP}
 ARROW_KEYS = {"Left": (-1, 0), "Right": (1, 0), "Up": (0, -1), "Down": (0, 1)}
+# While arranging, comma and period turn the selected monitor toward you; Shift makes
+# them semicolon and colon, for bigger steps.
+YAW_KEYS = {"comma": -1, "period": 1, "semicolon": -5, "colon": 5}
 HELP_KEYS = ("question", "F1")
 UPSCALE_TOOLTIP = "Enlarge a low-resolution image with AI (Upscayl)"
 # What the help panel lists: (section, [(keys, action)]). Each key is drawn as a
 # key cap; the mouse gestures in MOUSE are plain text, so the two never look alike.
 SHORTCUTS = [
     ("Move and zoom", [
-        (("Drag", "← ↑ ↓ →"), "Move (Shift: bigger steps)"),
+        (("Drag", "← ↑ ↓ →"), "Move the image (Shift: bigger steps)"),
         (("Scroll", "+", "−"), "Zoom"),
         (("C",), "Center, keeping the zoom"),
     ]),
@@ -49,20 +53,29 @@ SHORTCUTS = [
     ]),
     ("Span", [
         (("M",), "Arrange the monitors as they stand on your desk"),
+        (("Click",), "While arranging: select a monitor; the arrows then move it by 1 mm "
+                     "(Shift: 10 mm), not the image"),
+        ((",", "."), "While arranging: turn the selected monitor by 1° (Shift: 5°), toward you "
+                     "or, with a negative angle, away"),
         (("0",), "While arranging: back to their real sizes and places"),
+        (("H", "V", "R"), "Not while arranging: finish with M first"),
     ]),
     ("Window", [
         (("Tab",), "Next monitor, or the span across all of them"),
-        (("G",), "Rule-of-thirds grid"),
+        (("G",), "Grid: rule of thirds (in the span, also of the whole picture); "
+                 "centimeters of the desk while arranging"),
         (("Enter",), "Apply to the marked monitors"),
         (("?", "F1"), "Show these shortcuts"),
         (("Esc",), "Close a panel, or the window"),
     ]),
 ]
-MOUSE = {"Drag", "Scroll"}
+MOUSE = {"Drag", "Scroll", "Click"}
 SNAP = 10            # canvas pixels within which a dragged monitor meets another's edge
+SELECTED = (0.25, 0.6, 1.0)  # the monitor being arranged: its frame and name tag
 NUDGE = 5            # monitor pixels per arrow key press
 NUDGE_SHIFT = 50     # with Shift held
+ARRANGE_MM = 1       # millimeters per arrow key press while arranging, with real sizes
+ARRANGE_MM_SHIFT = 10
 # GTK's own theme leaves these classes uncolored on labels; the named colors
 # still come from the user's theme.
 STYLE = """
@@ -176,6 +189,7 @@ class Window(Gtk.ApplicationWindow):
         self.flash_timer = None
         self.applying = None  # what is being applied off the main thread, e.g. "Work"
         self.dragged = None   # the span's monitor being dragged into place, by name
+        self.selected = None  # the span's monitor the arrow keys move while arranging, by name
         self.held = None      # the canvas's (scale, origin) while it is dragged
 
         # Size against the monitor the window opens on; without knowing which,
@@ -259,6 +273,18 @@ class Window(Gtk.ApplicationWindow):
                                           self.on_arrange, toggle=True)
         self.arrange_button.set_visible(False)
         tools.append(self.arrange_button)
+        self.calibrate_button = icon_button("preferences-system-symbolic",
+                                            "Put a calibration image on the span, to line the monitors up",
+                                            self.calibrate)
+        self.calibrate_button.set_visible(False)
+        tools.append(self.calibrate_button)
+        self.arrangements = Arrangements(self.monitors[0].store.directory)
+        self.arrangements_button = Gtk.MenuButton(
+            icon_name="document-save-symbolic", focusable=False,
+            tooltip_text="Save how the monitors stand, or bring back a saved one",
+            popover=self.build_arrangements_popover())
+        self.arrangements_button.set_visible(False)
+        tools.append(self.arrangements_button)
         self.grid_button = icon_button("view-grid-symbolic", "Rule-of-thirds grid (G)",
                                        self.on_grid_button, toggle=True)
         self.grid_button.set_active(self.show_grid)
@@ -394,6 +420,77 @@ class Window(Gtk.ApplicationWindow):
                 grid.attach(label, 0, row, 1, 1)
             grid.attach(control, 1, row, 1, 1)
         return pinned_popover("Upscale with AI", grid)
+
+    def build_arrangements_popover(self):
+        """Names for where the monitors stand and how they are turned: kept apart from
+        the pictures, so a calibration is done once and brought back when a monitor moves."""
+        self.arrangement_name = Gtk.Entry(placeholder_text="Name", hexpand=True)
+        self.arrangement_name.connect("activate", lambda _e: self.save_arrangement())
+        save = Gtk.Button(label="Save current", focusable=False)
+        save.add_css_class("suggested-action")
+        save.connect("clicked", lambda _b: self.save_arrangement())
+        row = Gtk.Box(spacing=6)
+        row.append(self.arrangement_name)
+        row.append(save)
+        self.arrangement_list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box.append(row)
+        box.append(self.arrangement_list)
+        popover = pinned_popover("Desk arrangements", box)
+        popover.connect("show", lambda _p: self.fill_arrangements())
+        return popover
+
+    def fill_arrangements(self):
+        """One row per arrangement saved for these monitors: its name brings it back."""
+        while child := self.arrangement_list.get_first_child():
+            self.arrangement_list.remove(child)
+        saved = self.arrangements.named([m.name for m in self.monitors])
+        if not saved:
+            empty = Gtk.Label(label="None yet. Saving one keeps the places and the angle\n"
+                                    "of every monitor, apart from any picture.", xalign=0)
+            empty.add_css_class("dim-label")
+            self.arrangement_list.append(empty)
+        for name, entry in saved:
+            angles = ", ".join(f"{n} {a:+d}°" for n, a in sorted(entry.get("yaws", {}).items()))
+            use = Gtk.Button(label=name, focusable=False, hexpand=True, halign=Gtk.Align.FILL,
+                             tooltip_text=angles or "No monitor turned")
+            use.connect("clicked", lambda _b, name=name, entry=entry: self.use_arrangement(
+                name, entry))
+            remove = icon_button("user-trash-symbolic", "Delete this arrangement",
+                                 lambda name=name: self.delete_arrangement(name))
+            remove.add_css_class("flat")
+            line = Gtk.Box(spacing=6)
+            line.append(use)
+            line.append(remove)
+            self.arrangement_list.append(line)
+
+    def save_arrangement(self):
+        name = self.arrangement_name.get_text().strip()
+        if not name:
+            self.flash("Give the arrangement a name", "warning")
+            return
+        try:
+            self.arrangements.save(name, self.span.arrangement())
+        except OSError as error:
+            self.flash(f"Could not save the arrangement: {error.strerror or error}", "error")
+            return
+        self.arrangement_name.set_text("")
+        self.fill_arrangements()
+        self.flash(f"Arrangement “{name}” saved", "success")
+
+    def use_arrangement(self, name, entry):
+        if self.span.use_arrangement(entry):
+            self.refresh()
+            self.flash(f"Arrangement “{name}” · Apply to put it on the monitors", "accent")
+        else:
+            self.flash(f"“{name}” is for other monitors", "warning")
+
+    def delete_arrangement(self, name):
+        try:
+            self.arrangements.delete(name)
+        except OSError as error:
+            self.flash(f"Could not delete it: {error.strerror or error}", "error")
+        self.fill_arrangements()
 
     def build_layouts_popover(self):
         """Save what the monitors show, and switch to a saved layout with one click."""
@@ -754,7 +851,41 @@ class Window(Gtk.ApplicationWindow):
         cr.fill()
 
         if self.show_grid:
-            cr.set_source_rgba(1, 1, 1, 0.3)
+            self.draw_grid(cr, frames, scale, fx, fy)
+
+        cr.set_source_rgba(1, 1, 1, 0.9)
+        cr.set_line_width(3 if self.arranging else 2)
+        for _name, x, y, w, h in frames:
+            cr.rectangle(x, y, w, h)
+        cr.stroke()
+        chosen = next((f for f in frames if self.arranging and f[0] == self.selected), None)
+        if chosen:  # the monitor the arrow keys move
+            _name, x, y, w, h = chosen
+            cr.set_source_rgba(*SELECTED, 0.25)
+            cr.rectangle(x, y, w, h)
+            cr.fill()
+            cr.set_source_rgba(*SELECTED, 1)
+            cr.set_line_width(5)
+            cr.rectangle(x, y, w, h)
+            cr.stroke()
+        if len(frames) > 1:
+            self.draw_names(cr, frames)
+
+    def draw_grid(self, cr, frames, scale, fx, fy):
+        """The rule of thirds of each monitor. In the span, also the thirds of the whole
+        picture, which run on across the monitors, and while arranging, the desk's real
+        centimeters, numbered like the calibration picture."""
+        spanning = self.spanning
+        cr.save()
+        if spanning:  # lines that cross the monitors show only where a monitor is
+            cr.set_fill_rule(cairo.FILL_RULE_WINDING)
+            for _name, x, y, w, h in frames:
+                cr.rectangle(x, y, w, h)
+            cr.clip()
+        if self.arranging and self.span.units_per_mm:
+            self.draw_centimeters(cr, frames, scale, fx, fy)
+        else:
+            cr.set_source_rgba(1, 1, 1, 0.15 if spanning else 0.3)
             cr.set_line_width(1)
             for _name, x, y, w, h in frames:
                 for k in (1, 2):
@@ -763,27 +894,60 @@ class Window(Gtk.ApplicationWindow):
                     cr.move_to(x, y + h * k / 3)
                     cr.line_to(x + w, y + h * k / 3)
             cr.stroke()
+            if spanning:
+                width, height = self.span.width * scale, self.span.height * scale
+                cr.set_source_rgba(1, 0.84, 0.4, 0.65)
+                cr.set_line_width(1.5)
+                for k in (1, 2):
+                    cr.move_to(fx + width * k / 3, fy)
+                    cr.line_to(fx + width * k / 3, fy + height)
+                    cr.move_to(fx, fy + height * k / 3)
+                    cr.line_to(fx + width, fy + height * k / 3)
+                cr.stroke()
+        cr.restore()
 
-        cr.set_source_rgba(1, 1, 1, 0.9)
-        cr.set_line_width(3 if self.arranging else 2)
-        for _name, x, y, w, h in frames:
-            cr.rectangle(x, y, w, h)
-        cr.stroke()
-        if len(frames) > 1:
-            self.draw_names(cr, frames)
+    def draw_centimeters(self, cr, frames, scale, fx, fy):
+        """A line every centimeter of the real desk, thick every five, from the box's corner."""
+        span = self.span
+        per_cm = 10 * span.units_per_mm * scale  # canvas pixels
+        width, height = span.width * scale, span.height * scale
+        cr.set_font_size(10)
+        for k in range(int(max(width, height) / per_cm) + 1):
+            major = k % 5 == 0
+            cr.set_source_rgba(1, 1, 1, 0.4 if major else 0.1)
+            cr.set_line_width(1.5 if major else 1)
+            at = k * per_cm
+            cr.move_to(fx + at, fy)
+            cr.line_to(fx + at, fy + height)
+            cr.move_to(fx, fy + at)
+            cr.line_to(fx + width, fy + at)
+            cr.stroke()
+            if not major:
+                continue
+            cr.set_source_rgba(1, 1, 1, 0.8)
+            for _name, x, y, w, h in frames:
+                if x <= fx + at <= x + w:
+                    cr.move_to(fx + at + 3, y + 40)
+                    cr.show_text(str(k))
+                if y <= fy + at <= y + h:
+                    cr.move_to(x + 4, fy + at - 3)
+                    cr.show_text(str(k))
 
     def draw_names(self, cr, frames):
-        """Each monitor's name in the corner of its frame, on a dark tag."""
+        """Each monitor's name in the corner of its frame, on a dark tag; the selected one's is lit."""
         cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
         cr.set_font_size(12)
         for name, x, y, _w, _h in frames:
-            extents = cr.text_extents(name)
-            cr.set_source_rgba(0, 0, 0, 0.6)
+            yaw = self.span.yaws.get(name, 0) if self.spanning else 0
+            tag = f"{name}  {yaw:+d}°" if yaw else name  # the angle it is turned, when it is
+            extents = cr.text_extents(tag)
+            lit = self.arranging and name == self.selected
+            cr.set_source_rgba(*(SELECTED + (1,) if lit else (0, 0, 0, 0.6)))
             cr.rectangle(x + 6, y + 6, extents.x_advance + 12, 20)
             cr.fill()
             cr.set_source_rgba(1, 1, 1, 0.95)
             cr.move_to(x + 12, y + 20)
-            cr.show_text(name)
+            cr.show_text(tag)
 
     def select(self, index):
         self.index = index
@@ -805,6 +969,8 @@ class Window(Gtk.ApplicationWindow):
         # The span has no other monitor to copy from: it is all of them.
         self.copy_button.set_visible(len(self.monitors) > 1 and not self.spanning)
         self.arrange_button.set_visible(self.spanning)
+        self.calibrate_button.set_visible(self.arranging)
+        self.arrangements_button.set_visible(self.arranging)
         self.refresh_ai()
         monitor = self.monitor
         framing = monitor.framing
@@ -832,7 +998,9 @@ class Window(Gtk.ApplicationWindow):
         self.zoom_label.set_label(f"{pct}%")
         details = describe(monitor) + [
             ("real sizes" if monitor.real_sizes else "desktop sizes") if self.spanning else "",
-            "arranging the monitors" if self.arranging else "",
+            (f"Arranging {self.selected}{self.yaw_text()}{self.gap_text()} · M to finish"
+             if self.arranging else "Moving the picture · M to arrange")
+            if self.spanning else "",
             "moving the background" if self.moving is not framing else "",
             "upscaling…" if monitor.name in self.upscaling else "",
             "upscaled" if monitor.image != monitor.original else "",
@@ -848,12 +1016,28 @@ class Window(Gtk.ApplicationWindow):
                                   + GLib.markup_escape_text("  ·  ".join(filter(None, details))))
         self.area.queue_draw()
 
+    def yaw_text(self):
+        """" +40°" when the selected monitor is turned."""
+        degrees = self.span.yaws.get(self.selected, 0)
+        return f" {degrees:+d}°" if degrees else ""
+
+    def gap_text(self):
+        """" · gap 12 mm to left and 14 mm to right" for the selected monitor."""
+        span = self.span
+        if not span.units_per_mm:
+            return ""
+        near = [f"{round(distance / span.units_per_mm)} mm to {side}"
+                for side, (_other, distance) in sorted(span.gaps(self.selected).items())]
+        return f" · gap {' and '.join(near)}" if near else ""
+
     def edit(self, action):
         if self.arranging:
             if action == "reset":
                 self.span.reset_places()
                 self.flash("The monitors are back to their real sizes and places", "accent")
                 self.refresh()
+            else:
+                self.flash("Finish arranging first (M)", "warning")
             return  # mirror and rotate would move the picture under the monitors unseen
         self.monitor.edit(action)
         self.refresh()
@@ -861,9 +1045,29 @@ class Window(Gtk.ApplicationWindow):
     def on_arrange(self):
         if self.syncing:
             return
-        self.refresh()
         if self.arranging:
-            self.flash("Drag the monitors to match your desk · M to finish", "accent")
+            self.selected = self.selected or self.span.monitors[0].name
+            self.flash("Drag a monitor or select it and use the arrows · M to finish", "accent")
+        else:
+            self.selected = None
+        self.refresh()
+
+    def calibrate(self):
+        """Puts the calibration picture on the span, marked for Apply."""
+        if not self.arranging:
+            return
+        path = os.path.join(self.monitors[0].store.directory, calibration.FILE)
+        try:
+            calibration.make(self.span, path)
+            self.span.open_image(path)
+        except OSError as error:
+            self.flash(f"Could not make the calibration image: {error.strerror or error}",
+                       "error")
+            return
+        self.move_backdrop.set_active(False)
+        self.refresh()
+        self.flash("Calibration image · Apply it, then move the monitors until the lines meet",
+                   "accent")
 
     def fill_copy_menu(self, menu_button):
         """One row per other monitor, with the picture it shows: copy all of it, or the fill."""
@@ -1182,6 +1386,7 @@ class Window(Gtk.ApplicationWindow):
         if not name:
             self.flash("Drag one of the monitors", "warning")
             return
+        self.selected = name
         self.held = (scale, fx - span.left * scale, fy - span.top * scale)
         self.drag_origin = span.places[name][:2]
 
@@ -1220,7 +1425,8 @@ class Window(Gtk.ApplicationWindow):
         key = Gdk.keyval_name(Gdk.keyval_to_lower(keyval))
         if isinstance(self.get_focus(), Gtk.Editable) and key != "Escape":
             return False  # typing a layout's name: H, R or Enter are letters, not actions
-        open_panel = next((b for b in (self.fill_button, self.help_button, self.layouts_button)
+        open_panel = next((b for b in (self.fill_button, self.help_button, self.layouts_button,
+                                       self.arrangements_button)
                            if b.get_active()), None)
         if key == "Escape" and open_panel:
             open_panel.popdown()  # Esc closes the panel, not the whole window
@@ -1249,9 +1455,22 @@ class Window(Gtk.ApplicationWindow):
             self.refresh()
         elif key in ZOOM_KEYS:
             self.zoom_centered(ZOOM_KEYS[key])
+        elif key in YAW_KEYS and self.arranging:
+            self.span.set_yaw(self.selected, self.span.yaws.get(self.selected, 0)
+                              + YAW_KEYS[key])
+            self.refresh()
         elif key in ARROW_KEYS:
-            step = NUDGE_SHIFT if state & Gdk.ModifierType.SHIFT_MASK else NUDGE
+            shifted = bool(state & Gdk.ModifierType.SHIFT_MASK)
+            step = NUDGE_SHIFT if shifted else NUDGE
             dx, dy = ARROW_KEYS[key]
+            if self.arranging:
+                if self.span.units_per_mm:  # millimeters on the desk, not span units
+                    step = (ARRANGE_MM_SHIFT if shifted else ARRANGE_MM) * self.span.units_per_mm
+                x, y = self.span.places[self.selected][:2]
+                self.span.move_monitor(self.selected, x + dx * step, y + dy * step)
+                self.span.settle()
+                self.refresh()
+                return True
             self.moving.move_to(self.moving.x + dx * step, self.moving.y + dy * step)
             self.refresh()
         else:
@@ -1405,10 +1624,13 @@ class Window(Gtk.ApplicationWindow):
                     conflicts.append((monitor, output))
             else:
                 monitor.load(output)
-                reloaded.append(monitor.name)
+                reloaded.append(monitor)
+        if reloaded and self.span and not span_edited:
+            self.span.follow(reloaded[0])  # the span shows what the monitors do now
         self.refresh()
         if reloaded:
-            self.flash(f"New wallpaper loaded on {', '.join(reloaded)}", "success")
+            self.flash(f"New wallpaper loaded on {', '.join(m.name for m in reloaded)}",
+                       "success")
         self.ask_next(conflicts, then)
 
     def ask_next(self, conflicts, then):
