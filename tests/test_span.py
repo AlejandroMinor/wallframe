@@ -370,6 +370,43 @@ def test_a_turned_monitor_stretches_its_middle_across_the_screen(tmp_path):
     assert away.getpixel((0, 50))[0] == pytest.approx(64, abs=3)       # x 100 of 400
 
 
+def test_a_tilted_monitor_shows_the_middle_of_its_height(tmp_path):
+    monitors, positions = two_monitors(tmp_path)
+    whole = span.make(monitors, positions)
+    assert whole.squeeze_y("DP-2") == 1
+    whole.set_pitch("DP-2", 60)
+    assert whole.squeeze_y("DP-2") == pytest.approx(0.5)
+    assert whole.squeeze("DP-2") == 1                    # it is not turned, only tilted
+    frames = {name: (y, h) for name, _x, y, _w, h in whole.frames()}
+    assert frames["DP-2"] == pytest.approx((25 - whole.top, 50))   # the middle half of 0..100
+    assert whole.touched
+    again = span.make(monitors, positions, whole.snapshot())
+    assert again.pitches == {"DP-2": 60}
+    whole.discard_edit()
+    assert not whole.pitches and not whole.touched
+    whole.set_pitch("DP-2", -200)
+    assert whole.pitches["DP-2"] == -span.YAW_LIMIT
+    whole.reset_places()
+    assert not whole.pitches
+
+
+def test_a_tilted_monitor_stretches_its_middle_down_the_screen(tmp_path):
+    ramp = tmp_path / "ramp.png"                         # brightness grows with y, 0 to 255
+    img = Image.new("RGB", (400, 100))
+    img.putdata([(y * 255 // 99,) * 3 for y in range(100) for _x in range(400)])
+    img.save(ramp)
+    monitors, positions = two_monitors(tmp_path, image=str(ramp))
+    whole = span.make(monitors, positions)
+    flat = render.compose(str(ramp), whole.piece(monitors[1]))
+    assert flat.getpixel((50, 0))[0] == pytest.approx(0, abs=2)
+    assert flat.getpixel((50, 99))[0] == pytest.approx(255, abs=2)
+    whole.set_pitch("DP-2", 60)
+    tilted = render.compose(str(ramp), whole.piece(monitors[1]))
+    assert tilted.size == flat.size == (200, 100)
+    assert tilted.getpixel((50, 0))[0] == pytest.approx(64, abs=3)     # y 25..75, stretched
+    assert tilted.getpixel((50, 99))[0] == pytest.approx(191, abs=3)
+
+
 def test_a_span_the_monitors_no_longer_show_follows_them(tmp_path):
     monitors = desk_monitors(tmp_path)
     whole = span.make(monitors, DESK, sizes=MM)

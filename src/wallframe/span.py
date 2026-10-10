@@ -126,7 +126,8 @@ class Span(Picture):
         self.units_per_mm = self.default[first][2] / widths[first] if widths else None
         self.model = f"{len(monitors)} monitors"
         self.places = dict(self.default)
-        self.yaws = {}  # name -> degrees a monitor is turned toward the viewer
+        self.yaws = {}     # name -> degrees a monitor is turned toward the viewer
+        self.pitches = {}  # name -> degrees it is tilted toward the viewer
         self.bound()
         if saved:
             try:
@@ -174,11 +175,11 @@ class Span(Picture):
         if set(places) == set(self.places):  # the sizes come from the monitors, as now
             self.places = {name: (*places[name][:2], *self.default[name][2:])
                            for name in self.places}
-            self.yaws = {name: angle for name, angle in saved.get("yaws", {}).items()
-                         if name in self.places and angle}
+            self.yaws = self._angles(saved.get("yaws"))
+            self.pitches = self._angles(saved.get("pitches"))
         else:
             self.places = dict(self.default)
-            self.yaws = {}
+            self.yaws, self.pitches = {}, {}
         self.bound()
         framing = Framing(self.width, self.height, *size)
         framing.restore(saved)  # on another arrangement, its center stays at the center
@@ -196,6 +197,8 @@ class Span(Picture):
                  **self.framing.to_dict()}
         if self.yaws:
             entry["yaws"] = dict(self.yaws)
+        if self.pitches:
+            entry["pitches"] = dict(self.pitches)
         if self.original != self.image:
             entry["original"] = self.original
         return entry
@@ -207,27 +210,35 @@ class Span(Picture):
             entry["original"] = self.original
         return entry
 
+    def _angles(self, saved):
+        """The angles of a saved entry that are for these monitors, and not zero."""
+        return {name: angle for name, angle in (saved or {}).items()
+                if name in self.places and angle}
+
     def squeeze(self, name):
         """The share of its width a turned monitor shows: under 1 when it is turned toward
         the viewer, so it is stretched across the screen; over 1 when it is turned away."""
-        degrees = self.yaws.get(name, 0)
-        cosine = math.cos(math.radians(abs(degrees)))
-        return cosine if degrees >= 0 else 1 / cosine
+        return _share(self.yaws.get(name, 0))
+
+    def squeeze_y(self, name):
+        """The same for the height of a tilted monitor."""
+        return _share(self.pitches.get(name, 0))
 
     def frames(self):
         """(name, x, y, width, height) of what each monitor shows, in the box: a turned
-        monitor shows the middle of its width."""
+        or tilted monitor shows the middle of its width or height."""
         shown = []
         for name, (x, y, w, h) in self.places.items():
-            narrow = w * self.squeeze(name)
-            shown.append((name, x + (w - narrow) / 2 - self.left, y - self.top, narrow, h))
+            narrow_w, narrow_h = w * self.squeeze(name), h * self.squeeze_y(name)
+            shown.append((name, x + (w - narrow_w) / 2 - self.left,
+                          y + (h - narrow_h) / 2 - self.top, narrow_w, narrow_h))
         return shown
 
     def arrangement(self):
         """Where the monitors stand and how they are turned, to keep by name."""
         return {"monitors": sorted(self.places),
                 "places": {name: list(place) for name, place in self.places.items()},
-                "yaws": dict(self.yaws)}
+                "yaws": dict(self.yaws), "pitches": dict(self.pitches)}
 
     def use_arrangement(self, entry):
         """Stands the monitors as `entry` (see arrangement()) says, keeping the picture
@@ -239,20 +250,20 @@ class Span(Picture):
                       for name in self.places}
         except (KeyError, TypeError, ValueError):
             return False
-        self.yaws = {name: angle for name, angle in entry.get("yaws", {}).items()
-                     if name in places and angle}
-        self.arrange(places)
+        self.arrange(places)  # first, so the angles are checked against the same monitors
+        self.yaws = self._angles(entry.get("yaws"))
+        self.pitches = self._angles(entry.get("pitches"))
         self.settle()
         return True
 
     def set_yaw(self, name, degrees):
         """Turns a monitor by `degrees`, -75 to 75: toward the viewer when positive, away
         when negative."""
-        degrees = min(max(round(degrees), -YAW_LIMIT), YAW_LIMIT)
-        if degrees:
-            self.yaws[name] = degrees
-        else:
-            self.yaws.pop(name, None)
+        _set_angle(self.yaws, name, degrees)
+
+    def set_pitch(self, name, degrees):
+        """Tilts a monitor by `degrees`, -75 to 75, the same way up and down."""
+        _set_angle(self.pitches, name, degrees)
 
     def piece(self, monitor, framing=None, places=None):
         """The framing `monitor` shows of the span, or of `framing` with the
@@ -263,7 +274,8 @@ class Span(Picture):
         x, y, w, h = places[monitor.name]
         return (framing or self.framing).piece(x - left, y - top, w, h,
                                                monitor.width, monitor.height,
-                                               self.squeeze(monitor.name))
+                                               self.squeeze(monitor.name),
+                                               self.squeeze_y(monitor.name))
 
     def pieces(self):
         """[(monitor, Snapshot)]: what Apply hands each monitor."""
@@ -291,7 +303,7 @@ class Span(Picture):
 
     def reset_places(self):
         """Back to the sizes and places the desktop and the EDIDs give, and no one turned."""
-        self.yaws = {}
+        self.yaws, self.pitches = {}, {}
         self.arrange(dict(self.default))
         self.settle()
 
@@ -323,7 +335,7 @@ class Span(Picture):
         tell it shows them."""
         super().mark_applied()
         self.applied_places = dict(self.places)
-        self.applied_yaws = dict(self.yaws)
+        self.applied_yaws, self.applied_pitches = dict(self.yaws), dict(self.pitches)
         whole = Framing(self.width, self.height, self.framing.source_w, self.framing.source_h)
         whole.restore(self.applied_framing)
         self.applied_pieces = {m.name: self.piece(m, whole).key() for m in self.monitors}
@@ -332,11 +344,11 @@ class Span(Picture):
     def touched(self):
         """Moving a monitor changes every piece, so it waits for Apply too."""
         return (super().touched or self.places != self.applied_places
-                or self.yaws != self.applied_yaws)
+                or self.yaws != self.applied_yaws or self.pitches != self.applied_pitches)
 
     def discard_edit(self):
         """Puts the monitors back where they were applied, then the picture."""
-        self.yaws = dict(self.applied_yaws)
+        self.yaws, self.pitches = dict(self.applied_yaws), dict(self.applied_pitches)
         self.arrange(dict(self.applied_places))
         super().discard_edit()
 
@@ -354,3 +366,17 @@ class Span(Picture):
 def _nearest(value, targets, reach):
     best = min(targets, key=lambda t: abs(t - value), default=value)
     return best if abs(best - value) <= reach else value
+
+
+def _share(degrees):
+    """The share of its size that a monitor turned by `degrees` shows."""
+    cosine = math.cos(math.radians(abs(degrees)))
+    return cosine if degrees >= 0 else 1 / cosine
+
+
+def _set_angle(angles, name, degrees):
+    degrees = min(max(round(degrees), -YAW_LIMIT), YAW_LIMIT)
+    if degrees:
+        angles[name] = degrees
+    else:
+        angles.pop(name, None)

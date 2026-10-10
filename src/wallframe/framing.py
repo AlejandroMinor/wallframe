@@ -29,7 +29,8 @@ class Framing:
         self.fill_color = "#000000"
         self.blur = BLUR_DEFAULT
         self.spanned = False
-        self.squeeze = 1.0  # a turned monitor in a span shows this share of its width, resized across it
+        self.squeeze = 1.0    # a turned monitor in a span shows this share of its width, resized across it
+        self.squeeze_y = 1.0  # and a tilted one this share of its height
         self.backdrop = (Framing(monitor_w, monitor_h, source_w, source_h, backdrop=False)
                          if backdrop else None)
         self.recenter()
@@ -127,7 +128,7 @@ class Framing:
         A span's piece that gets clamped is a framing of its own from then on.
         """
         self.spanned = False
-        self.squeeze = 1.0
+        self.squeeze = self.squeeze_y = 1.0
         self.zoom = min(max(self.zoom, self.lowest_zoom), self.min_zoom * MAX_ZOOM)
         self.x = _clamp_axis(self.x, self.monitor_w, self.image_w * self.zoom)
         self.y = _clamp_axis(self.y, self.monitor_h, self.image_h * self.zoom)
@@ -154,23 +155,26 @@ class Framing:
                 left + self.monitor_w / self.zoom, top + self.monitor_h / self.zoom)
 
     def narrowed(self):
-        """What a turned monitor really shows: the middle `squeeze` of its width, to be
-        stretched back across it (or more than its width, compressed, when squeeze is
-        over 1). The framing itself when not turned."""
-        if self.squeeze == 1:
+        """What a turned or tilted monitor really shows: the middle `squeeze` of its width and
+        `squeeze_y` of its height, to be stretched back across the screen (or more than
+        the screen, compressed, when over 1). The framing itself when neither."""
+        if self.squeeze == 1 and self.squeeze_y == 1:
             return self
         inner = copy.copy(self)
         inner.monitor_w = max(1, round(self.monitor_w * self.squeeze))
-        cut = (self.monitor_w - inner.monitor_w) / 2
-        inner.x = self.x - cut
-        inner.squeeze = 1.0
+        inner.monitor_h = max(1, round(self.monitor_h * self.squeeze_y))
+        cut_x = (self.monitor_w - inner.monitor_w) / 2
+        cut_y = (self.monitor_h - inner.monitor_h) / 2
+        inner.x, inner.y = self.x - cut_x, self.y - cut_y
+        inner.squeeze = inner.squeeze_y = 1.0
         if self.backdrop:
             inner.backdrop = copy.copy(self.backdrop)
-            inner.backdrop.monitor_w = inner.monitor_w
-            inner.backdrop.x = self.backdrop.x - cut
+            inner.backdrop.monitor_w, inner.backdrop.monitor_h = inner.monitor_w, inner.monitor_h
+            inner.backdrop.x = self.backdrop.x - cut_x
+            inner.backdrop.y = self.backdrop.y - cut_y
         return inner
 
-    def piece(self, left, top, width, height, pixels_w, pixels_h, squeeze=1.0):
+    def piece(self, left, top, width, height, pixels_w, pixels_h, squeeze=1.0, squeeze_y=1.0):
         """What one monitor of a span shows, as a framing of that monitor.
 
         This framing covers the whole desktop, in logical pixels; the monitor sits
@@ -182,7 +186,7 @@ class Framing:
         piece = Framing(pixels_w, pixels_h, self.source_w, self.source_h,
                         backdrop=bool(self.backdrop))
         piece.fill, piece.fill_color = self.fill, self.fill_color
-        piece.squeeze = squeeze
+        piece.squeeze, piece.squeeze_y = squeeze, squeeze_y
         piece.blur = round(self.blur * scale)  # in monitor pixels, like everything else
         for part, whole in ((piece, self), (piece.backdrop, self.backdrop)):
             if whole:
@@ -234,7 +238,7 @@ class Framing:
                 fill = ("blur", self.blur, self.backdrop.key())
         return (self.flip_h, self.flip_v, self.rotation,
                 round(self.relative_zoom, 4), round(self.x, 1), round(self.y, 1), fill,
-                round(self.squeeze, 4))
+                round(self.squeeze, 4), round(self.squeeze_y, 4))
 
     def to_dict(self):
         """For state.json; zoom is relative so it survives a resolution change.
@@ -248,6 +252,8 @@ class Framing:
             saved["span"] = True  # restored as it is, never clamped
         if self.squeeze != 1:
             saved["squeeze"] = self.squeeze
+        if self.squeeze_y != 1:
+            saved["squeeze_y"] = self.squeeze_y
         if self.backdrop:
             backdrop = self.backdrop
             saved.update(fill=self.fill, fill_color=self.fill_color, blur=self.blur,
@@ -267,6 +273,7 @@ class Framing:
         self.flip_v = saved.get("flip_v", False)
         self.rotation = saved.get("rotation", 0)
         self.squeeze = saved.get("squeeze", 1.0)
+        self.squeeze_y = saved.get("squeeze_y", 1.0)
         self.fill = saved.get("fill", "blur")
         self.fill_color = saved.get("fill_color", "#000000")
         self.blur = saved.get("blur", BLUR_DEFAULT)

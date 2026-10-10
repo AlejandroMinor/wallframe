@@ -116,6 +116,7 @@ for_window [app_id="io.github.AlejandroMinor.wallframe"] floating enable
 | Arrange the monitors of the span as on your desk | Toolbar, in the span | `M` |
 | Put a calibration grid on the span | Toolbar, while arranging | |
 | Turn the selected monitor by its real angle | Keys, while arranging | `.` / `,` (Shift: 5°) |
+| Tilt the selected monitor up or down | Keys, while arranging | `<` / `>` |
 | Save or bring back where the monitors stand | Toolbar, while arranging | |
 | Apply to the marked monitors | Apply | `Enter` |
 | Show all keyboard shortcuts | Keyboard button, bottom left | `?` / `F1` |
@@ -163,7 +164,7 @@ All of this is done in the editor, while arranging, with the **Arrange** button 
 
 1. **Show the guide.** Press **Calibrate**, then Apply. It draws a grid in real centimeters, a white line through the middle and two diagonals. These lines are your ruler: they should look straight across every join.
 2. **Height.** Click the frame of a side monitor in the canvas and move it with the arrow keys (1 mm each, 10 mm with Shift) until the white line is one straight line across the join. Move the outer monitors and leave the center one alone.
-3. **Angle.** If the diagonals still look bent, give that monitor an angle: `.` adds 1° and `,` removes 1° (`:` and `;` for 5°). A negative angle does the opposite. The angle also changes the separation between the monitors by itself. Step 4 fixes that.
+3. **Angle.** If the diagonals still look bent, give that monitor an angle: `.` adds 1° and `,` removes 1° (`:` and `;` for 5°). A negative angle does the opposite. If a monitor leans back or forward, `<` and `>` do the same up and down. The angle also changes the separation between the monitors by itself. Step 4 fixes that.
 4. **Separation.** Your real monitors have bezels, so there is a gap between the screens. In the canvas, the distance between two frames is that gap: it decides how much of the picture is skipped between them. Move the frame of the outer monitor with the left and right arrow keys, a few millimeters at a time, until what crosses the join looks like one picture. If it gets worse, go the other way.
 5. **Save it.** The **Desk arrangements** button saves the places and the angles under a name. If a monitor moves later, bring the arrangement back with one click. Apply puts it on the monitors.
 

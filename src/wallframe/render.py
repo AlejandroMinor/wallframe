@@ -69,7 +69,7 @@ def background(image, framing, size):
 
 def compose(source, framing):
     """What the monitor will show, at its exact size and gaps filled, in memory."""
-    inner = framing.narrowed()  # a turned monitor in a span shows less, stretched across
+    inner = framing.narrowed()  # a turned or tilted monitor in a span shows less, stretched across
     with Image.open(source) as img:
         picture = shown(transform(img.convert("RGB"), inner), inner,
                         (inner.monitor_w, inner.monitor_h))

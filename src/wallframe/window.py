@@ -30,6 +30,8 @@ ARROW_KEYS = {"Left": (-1, 0), "Right": (1, 0), "Up": (0, -1), "Down": (0, 1)}
 # While arranging, comma and period turn the selected monitor toward you; Shift makes
 # them semicolon and colon, for bigger steps.
 YAW_KEYS = {"comma": -1, "period": 1, "semicolon": -5, "colon": 5}
+# And < and > (the second with Shift) tilt it up or down, one degree at a time.
+PITCH_KEYS = {"less": -1, "greater": 1}
 HELP_KEYS = ("question", "F1")
 UPSCALE_TOOLTIP = "Enlarge a low-resolution image with AI (Upscayl)"
 # What the help panel lists: (section, [(keys, action)]). Each key is drawn as a
@@ -57,6 +59,7 @@ SHORTCUTS = [
                      "(Shift: 10 mm), not the image"),
         ((",", "."), "While arranging: turn the selected monitor by 1° (Shift: 5°), toward you "
                      "or, with a negative angle, away"),
+        (("<", ">"), "While arranging: tilt the selected monitor up or down by 1°, the same way"),
         (("0",), "While arranging: back to their real sizes and places"),
         (("H", "V", "R"), "Not while arranging: finish with M first"),
     ]),
@@ -451,7 +454,11 @@ class Window(Gtk.ApplicationWindow):
             empty.add_css_class("dim-label")
             self.arrangement_list.append(empty)
         for name, entry in saved:
-            angles = ", ".join(f"{n} {a:+d}°" for n, a in sorted(entry.get("yaws", {}).items()))
+            yaws, pitches = entry.get("yaws", {}), entry.get("pitches", {})
+            angles = ", ".join(
+                " ".join(filter(None, [n, f"{yaws[n]:+d}°" if n in yaws else "",
+                                       f"↕{pitches[n]:+d}°" if n in pitches else ""]))
+                for n in sorted(set(yaws) | set(pitches)))
             use = Gtk.Button(label=name, focusable=False, hexpand=True, halign=Gtk.Align.FILL,
                              tooltip_text=angles or "No monitor turned")
             use.connect("clicked", lambda _b, name=name, entry=entry: self.use_arrangement(
@@ -939,7 +946,10 @@ class Window(Gtk.ApplicationWindow):
         cr.set_font_size(12)
         for name, x, y, _w, _h in frames:
             yaw = self.span.yaws.get(name, 0) if self.spanning else 0
-            tag = f"{name}  {yaw:+d}°" if yaw else name  # the angle it is turned, when it is
+            pitch = self.span.pitches.get(name, 0) if self.spanning else 0
+            # the angles it is turned and tilted, when it is
+            tag = "  ".join(filter(None, [name, f"{yaw:+d}°" if yaw else "",
+                                          f"↕{pitch:+d}°" if pitch else ""]))
             extents = cr.text_extents(tag)
             lit = self.arranging and name == self.selected
             cr.set_source_rgba(*(SELECTED + (1,) if lit else (0, 0, 0, 0.6)))
@@ -1017,9 +1027,10 @@ class Window(Gtk.ApplicationWindow):
         self.area.queue_draw()
 
     def yaw_text(self):
-        """" +40°" when the selected monitor is turned."""
-        degrees = self.span.yaws.get(self.selected, 0)
-        return f" {degrees:+d}°" if degrees else ""
+        """" +40° ↕+10°" when the selected monitor is turned or tilted."""
+        yaw = self.span.yaws.get(self.selected, 0)
+        pitch = self.span.pitches.get(self.selected, 0)
+        return (f" {yaw:+d}°" if yaw else "") + (f" ↕{pitch:+d}°" if pitch else "")
 
     def gap_text(self):
         """" · gap 12 mm to left and 14 mm to right" for the selected monitor."""
@@ -1458,6 +1469,10 @@ class Window(Gtk.ApplicationWindow):
         elif key in YAW_KEYS and self.arranging:
             self.span.set_yaw(self.selected, self.span.yaws.get(self.selected, 0)
                               + YAW_KEYS[key])
+            self.refresh()
+        elif key in PITCH_KEYS and self.arranging:
+            self.span.set_pitch(self.selected, self.span.pitches.get(self.selected, 0)
+                                + PITCH_KEYS[key])
             self.refresh()
         elif key in ARROW_KEYS:
             shifted = bool(state & Gdk.ModifierType.SHIFT_MASK)

@@ -36,12 +36,13 @@ def test_bringing_one_back_stands_the_monitors_and_keeps_the_picture(tmp_path):
     whole = stood(tmp_path)
     whole.move_monitor("DP-2", 230, 15)
     whole.set_yaw("DP-2", -20)
+    whole.set_pitch("DP-1", 12)
     entry = whole.arrangement()
     whole.reset_places()                                     # as a moved monitor would leave it
     assert whole.places["DP-2"][:2] != (230, 15) and not whole.yaws
     assert whole.use_arrangement(entry) is True
     assert whole.places["DP-2"][:2] == (230, 15)
-    assert whole.yaws == {"DP-2": -20}
+    assert whole.yaws == {"DP-2": -20} and whole.pitches == {"DP-1": 12}
     assert whole.touched                                     # waits for Apply
     assert whole.use_arrangement({"monitors": ["X", "Y"], "places": {}}) is False
     assert whole.use_arrangement({"monitors": ["DP-1", "DP-2"]}) is False  # nothing to place
