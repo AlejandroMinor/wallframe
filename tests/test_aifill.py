@@ -24,3 +24,14 @@ def test_the_prompt_says_where_the_original_sits_when_it_is_known():
     assert "no visible seam" in text and "crop of a larger scene" in text
     assert "from 20%" not in aifill.prompt("#ff00aa", 1000, 400)       # unknown: not guessed
 
+
+def test_the_color_least_in_a_picture_is_the_one_chosen():
+    from PIL import Image
+    red_and_green = Image.new("RGB", (20, 20), (255, 0, 0))
+    red_and_green.paste((0, 255, 0), (0, 0, 20, 10))                 # half green, half red
+    assert aifill.share(red_and_green, "#00ff00") == pytest.approx(0.5)
+    assert aifill.share(red_and_green, "#0000ff") == 0
+    chosen, name = aifill.least_present(red_and_green)
+    assert chosen != "#00ff00" and aifill.share(red_and_green, chosen) == 0
+    assert name == aifill.name_of(chosen) and aifill.name_of("#123456") == "#123456"
+

@@ -18,7 +18,7 @@ from wallframe.daemons import Daemon, Output  # noqa: E402
 from wallframe.layouts import Layouts  # noqa: E402
 from wallframe.monitor import Monitor  # noqa: E402
 from wallframe.state import Store  # noqa: E402
-from wallframe.window import EXPORT_MENU, NUDGE, NUDGE_SHIFT, Window, build_menu  # noqa: E402
+from wallframe.window import EXPORT_MENU, NUDGE, NUDGE_SHIFT, Window, build_menu, stamp  # noqa: E402
 from gi.repository import Gdk, Gtk  # noqa: E402
 
 NO_DAEMON = "wallframe-no-existe-este-programa"
@@ -655,3 +655,11 @@ def test_no_attribute_of_the_window_hides_one_of_its_methods():
     """self.x = widget would replace def x: the method then fails with 'not callable'."""
     attributes, methods = window_names()
     assert not attributes & methods, sorted(attributes & methods)
+
+
+def test_the_stamp_is_the_date_and_the_time_to_the_second():
+    import time
+    moment = time.struct_time((2026, 10, 10, 14, 32, 7, 5, 283, -1))
+    assert stamp(moment) == "10102026-143207"
+    assert stamp(time.struct_time((2026, 10, 10, 14, 32, 8, 5, 283, -1))) != stamp(moment)
+

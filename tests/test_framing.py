@@ -303,3 +303,12 @@ def test_a_save_from_before_the_monitor_size_was_kept_still_loads():
     restored = Framing(1080, 1920, 4000, 2000)
     restored.restore(saved)
     assert restored.key() == f.key()
+
+
+def test_the_empty_share_is_what_the_image_leaves_uncovered():
+    framing = Framing(400, 100, 100, 100)
+    assert framing.empty_share == 0                         # it starts covering the monitor
+    framing.zoom, framing.x, framing.y = 1.0, 150, 0         # 100x100 in the middle of 400x100
+    assert framing.empty_share == pytest.approx(0.75)
+    framing.x = 350                                          # half of it past the right edge
+    assert framing.empty_share == pytest.approx(0.875)

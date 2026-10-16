@@ -72,6 +72,13 @@ class Framing:
                 and self.y + self.image_h * self.zoom >= self.monitor_h - slack)
 
     @property
+    def empty_share(self):
+        """The fraction of the monitor the image leaves empty, 0 when it covers it."""
+        left, top, right, bottom = self.placement()[1]
+        covered = max(0, right - left) * max(0, bottom - top)
+        return 1 - covered / (self.monitor_w * self.monitor_h)
+
+    @property
     def can_move(self):
         """False when the image matches the monitor exactly, so there is nowhere to drag it."""
         return (abs(self.monitor_w - self.image_w * self.zoom) > 0.5

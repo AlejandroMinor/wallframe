@@ -1,5 +1,6 @@
 import os
 import threading
+import time
 
 import cairo
 import gi
@@ -23,7 +24,6 @@ ICONS_DIR = os.path.join(os.path.dirname(__file__), "icons")
 MARGIN = 60  # canvas space around the frame, to see what is left out
 ZOOM_STEP = 1.1
 FLASH_MS = 3000  # how long status bar messages stay
-EXPORT_COLOR = "#00ff00"  # the empty space of an export when the fill is blur: a green no picture has
 KEY_ACTIONS = {"h": "mirror", "v": "flip", "r": "rotate", "0": "reset", "KP_0": "reset"}
 DISCARD_KEY = "d"
 ZOOM_KEYS = {"plus": ZOOM_STEP, "equal": ZOOM_STEP, "KP_Add": ZOOM_STEP,
@@ -178,6 +178,12 @@ DESK_MENU = [
     ("Desk", [("Show the calibration guide", "calibrate"),
               ("Reset to default", "reset-desk")]),
 ]
+
+
+def stamp(now=None):
+    """The date and time, DDMMYYYY-HHMMSS, to end an exported file's name with: two exports
+    never get the same name, and they sort by when they were made."""
+    return time.strftime("%d%m%Y-%H%M%S", now or time.localtime())
 
 
 def build_menu(sections, prefix="win"):
@@ -769,10 +775,42 @@ class Window(Gtk.ApplicationWindow):
             action.connect("activate", lambda _a, _p, callback=callback: callback())
             self.add_action(action)
 
-    def export_color(self, framing):
-        """The color the empty space has in an export for an AI: the fill color, or a green
-        when the fill is blur."""
-        return framing.fill_color if framing.fill == "color" else EXPORT_COLOR
+    def export_color(self, framing, source):
+        """(color, concern) for the empty space of an export for an AI: your fill color, or when
+        the fill is blur, the vivid color least present in the picture. `concern` is None, or
+        (message, detail) when the AI could mistake the color for part of the picture."""
+        try:
+            small = render.thumbnail(source, 160).convert("RGB")
+        except OSError:
+            small = None
+        if framing.fill == "color":
+            color = framing.fill_color
+            if small is None or aifill.share(small, color) < aifill.CLASH:
+                return color, None
+            return color, ("The fill color is close to colors in your picture",
+                           "An AI may take parts of the picture for empty space. Cancel to pick "
+                           "another color in the Fill panel, or continue anyway.")
+        color, name = aifill.least_present(small) if small else aifill.CANDIDATES[0]
+        return color, ("The empty space is blurred",
+                       "An AI fills the empty space best when it is a solid color that is not in "
+                       "your picture. Cancel to pick one in the Fill panel (Fill: Color), or "
+                       f"continue: wallframe will use {name} ({color}), the color least present "
+                       "in your picture.")
+
+    def confirm(self, message, detail, go, then):
+        """Asks to cancel or to go on; then() runs when going on."""
+        dialog = Gtk.AlertDialog(message=message, detail=detail, buttons=["Cancel", go],
+                                 cancel_button=0, default_button=1)
+
+        def answered(dialog, result):
+            try:
+                choice = dialog.choose_finish(result)
+            except GLib.Error:  # closed with Esc: cancelled
+                return
+            if choice == 1:
+                then()
+
+        dialog.choose(self, None, answered)
 
     def copy_fill_prompt(self):
         """Puts the text to give an image AI on the clipboard, with this color and size."""
@@ -780,8 +818,8 @@ class Window(Gtk.ApplicationWindow):
         if framing.covers:
             self.flash("Nothing to fill: zoom out to leave empty space first", "warning")
             return
-        text = aifill.prompt(self.export_color(framing), framing.monitor_w, framing.monitor_h,
-                             framing.placement()[1])
+        color, _concern = self.export_color(framing, self.monitor.image)
+        text = aifill.prompt(color, framing.monitor_w, framing.monitor_h, framing.placement()[1])
         value = GObject.Value()
         value.init(GObject.TYPE_STRING)
         value.set_string(text)
@@ -825,31 +863,48 @@ class Window(Gtk.ApplicationWindow):
         """Saves what is on the canvas, as it will look, with its fill: for using it elsewhere."""
         monitor = self.monitor
         framing, source = monitor.export_framing(), monitor.image
-        self.ask_export("Export the picture", f"wallframe-{monitor.name.lower()}.png",
+        self.ask_export("Export the picture", f"wallframe-export-{monitor.name.lower()}-{stamp()}.png",
                         lambda path: render.compose(source, framing).save(path),
                         lambda path: f"Saved {os.path.basename(path)}")
 
     def export_for_ai(self):
         """Saves the picture with its empty space in one color, and a mask of it, so an image
-        AI can be asked to fill that space; the result opens like any picture."""
+        AI can be asked to fill that space; the result opens like any picture.
+
+        It says so first when the fill is blur, a color the AI could mistake for the picture,
+        or when most of the picture is empty space; each notice tells how much of it is."""
         monitor = self.monitor
         framing = monitor.export_framing()
         if framing.covers:
             self.flash("Nothing to fill: zoom out to leave empty space first", "warning")
             return
-        color, source = self.export_color(framing), monitor.image
+        source = monitor.image
+        color, concern = self.export_color(framing, source)
+        empty = f"{framing.empty_share:.0%}"
+        if concern:
+            concern = (concern[0], f"{empty} of the picture is empty space. {concern[1]}")
+        elif framing.empty_share > aifill.LARGE:
+            concern = (f"{empty} of the picture is empty space",
+                       "An AI invents everything it paints there, so the more empty space, the "
+                       "less the result looks like your picture. Cancel and zoom in to leave "
+                       "less, or continue anyway.")
 
         def write(path):
             picture, mask = render.export_for_fill(source, framing, color)
             picture.save(path)
             mask.save(path[:-4] + "-mask.png")
 
-        self.ask_export(
-            "Export the picture and its mask, to fill the empty space",
-            f"wallframe-fill-{monitor.name.lower()}.png", write,
-            lambda path: f"Saved {os.path.basename(path)} and its mask · ask an AI to fill the "
-                         f"{color} area (a color not in the picture works best), then open "
-                         "the result (O)")
+        def go():
+            self.ask_export(
+                "Export the picture and its mask, to fill the empty space",
+                f"wallframe-export-fill-{monitor.name.lower()}-{stamp()}.png", write,
+                lambda path: f"Saved {os.path.basename(path)} and its mask · ask an AI to fill "
+                             f"the {aifill.name_of(color)} area ({empty}), then open the result (O)")
+
+        if concern:
+            self.confirm(*concern, "Continue", go)
+        else:
+            go()
 
     def connect_input(self):
         drag = Gtk.GestureDrag()

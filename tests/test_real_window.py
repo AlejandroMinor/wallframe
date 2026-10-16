@@ -55,7 +55,7 @@ def in_window(tmp_path, body, with_span=True):
                             Layouts(str(tmp_path / "layouts")), positions, across)
             window.refresh()
             body(window)
-        except Exception as error:  # noqa: BLE001 - handed back to the test
+        except BaseException as error:  # noqa: BLE001 - handed back, pytest.fail included
             failure.append(error)
         app.quit()
 
@@ -68,6 +68,7 @@ def in_window(tmp_path, body, with_span=True):
 
 
 def leave_empty_space(window):
+    """Zooms the picture out to half its fitting size, off center: most of it is empty."""
     framing = window.monitor.framing
     framing.zoom, framing.x, framing.y = framing.fit_zoom * 0.5, 100, 40
     window.refresh()
@@ -80,7 +81,7 @@ def test_the_window_builds_with_and_without_the_span(tmp_path):
 
 
 def test_every_export_action_works_and_writes_its_files(tmp_path):
-    saved, clipboard = {}, Clipboard()
+    saved, clipboard, asked = {}, Clipboard(), []
 
     def body(window):
         leave_empty_space(window)
@@ -91,15 +92,82 @@ def test_every_export_action_works_and_writes_its_files(tmp_path):
             saved[name] = done(path)
 
         window.ask_export = ask
+        window.confirm = lambda message, detail, go, then: (asked.append(message), then())
         window.get_clipboard = lambda: clipboard
         window.export_picture()
         window.export_for_ai()
         window.copy_fill_prompt()
 
     in_window(tmp_path, body)
-    assert set(saved) == {"wallframe-span.png", "wallframe-fill-span.png"}
-    assert (tmp_path / "wallframe-fill-span-mask.png").exists()
-    assert "#00ff00" in saved["wallframe-fill-span.png"] and clipboard.set
+    names = sorted(saved)
+    assert len(names) == 2 and names[0].startswith("wallframe-export-fill-span-")
+    assert names[1].startswith("wallframe-export-span-")   # each ends with its date and time
+    assert (tmp_path / (names[0][:-4] + "-mask.png")).exists()
+    assert asked == ["The empty space is blurred"]       # the fill is blur: it said so first
+    assert "area" in saved[names[0]] and clipboard.set
+
+
+def test_a_blurred_fill_asks_first_and_cancelling_exports_nothing(tmp_path):
+    asked = []
+
+    def body(window):
+        leave_empty_space(window)
+        window.ask_export = lambda *args: pytest.fail("cancelled: nothing should be exported")
+        window.confirm = lambda message, detail, go, then: asked.append((message, detail, go))
+        window.export_for_ai()                           # confirm never calls then(): cancel
+
+    in_window(tmp_path, body)
+    message, detail, go = asked[0]
+    assert message == "The empty space is blurred" and go == "Continue"
+    assert "least present in your picture" in detail and "% of the picture is empty" in detail
+
+
+def test_mostly_empty_space_warns_with_how_much(tmp_path):
+    asked, flashed = [], []
+
+    def body(window):
+        leave_empty_space(window)
+        window.monitor.framing.fill = "color"
+        window.monitor.framing.fill_color = "#ff00ff"
+        window.confirm = lambda message, detail, go, then: (asked.append(message), then())
+        window.ask_export = lambda title, name, write, done: flashed.append(done(name))
+        window.export_for_ai()
+
+    in_window(tmp_path, body)
+    assert len(asked) == 1 and asked[0].endswith("% of the picture is empty space")
+    assert int(asked[0].split("%")[0]) > 50
+    assert "%)" in flashed[0]                            # the saved notice says it too
+
+
+def test_a_fill_color_that_is_not_in_the_picture_exports_without_asking(tmp_path):
+    exported = []
+
+    def body(window):
+        framing = window.monitor.framing                 # a thin empty border: no notice
+        framing.zoom = framing.min_zoom * 0.9
+        framing.center()
+        window.monitor.framing.fill = "color"
+        window.monitor.framing.fill_color = "#ff00ff"    # the test picture has no magenta
+        window.confirm = lambda *args: pytest.fail("nothing to warn about")
+        window.ask_export = lambda title, name, write, done: exported.append(name)
+        window.export_for_ai()
+
+    in_window(tmp_path, body)
+    assert len(exported) == 1 and exported[0].startswith("wallframe-export-fill-span-")
+
+
+def test_a_fill_color_like_the_picture_warns(tmp_path):
+    asked = []
+
+    def body(window):
+        leave_empty_space(window)
+        window.monitor.framing.fill = "color"
+        window.monitor.framing.fill_color = "#000080"    # the test picture has this navy
+        window.confirm = lambda message, detail, go, then: asked.append(message)
+        window.export_for_ai()
+
+    in_window(tmp_path, body)
+    assert asked == ["The fill color is close to colors in your picture"]
 
 
 def test_nothing_to_fill_is_said_and_nothing_is_written(tmp_path):
