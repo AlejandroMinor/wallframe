@@ -197,6 +197,27 @@ def build_menu(sections, prefix="win"):
     return menu
 
 
+LABEL_SIZE = 10      # the centimeter numbers, in points
+LABEL_TOP = 40       # where a frame's column of numbers sits, below its name tag
+LABEL_SIDE = 26      # the room a frame's row of numbers takes at its left
+
+
+def centimeter_labels(frames, count, per_cm, fx, fy, width_of):
+    """(text, x, y) of the numbers every five centimeters along each frame's top and left side,
+    leaving out those that would run over the name tag, each other or the frame's edge."""
+    labels = []
+    for k in range(5, count, 5):
+        text, at = str(k), k * per_cm
+        for _name, x, y, w, h in frames:
+            left = fx + at + 3
+            if x + LABEL_SIDE <= left and left + width_of(text) <= x + w:
+                labels.append((text, left, y + LABEL_TOP))
+            base = fy + at - 3
+            if y + LABEL_TOP + LABEL_SIZE <= base <= y + h:
+                labels.append((text, x + 4, base))
+    return labels
+
+
 def describe(monitor):
     """Model, size and orientation, as shown in tooltips and the status bar.
 
@@ -1109,8 +1130,9 @@ class Window(Gtk.ApplicationWindow):
         span = self.span
         per_cm = 10 * span.units_per_mm * scale  # canvas pixels
         width, height = span.width * scale, span.height * scale
-        cr.set_font_size(10)
-        for k in range(int(max(width, height) / per_cm) + 1):
+        cr.set_font_size(LABEL_SIZE)
+        count = int(max(width, height) / per_cm) + 1
+        for k in range(count):
             major = k % 5 == 0
             cr.set_source_rgba(1, 1, 1, 0.4 if major else 0.1)
             cr.set_line_width(1.5 if major else 1)
@@ -1120,16 +1142,11 @@ class Window(Gtk.ApplicationWindow):
             cr.move_to(fx, fy + at)
             cr.line_to(fx + width, fy + at)
             cr.stroke()
-            if not major:
-                continue
-            cr.set_source_rgba(1, 1, 1, 0.8)
-            for _name, x, y, w, h in frames:
-                if x <= fx + at <= x + w:
-                    cr.move_to(fx + at + 3, y + 40)
-                    cr.show_text(str(k))
-                if y <= fy + at <= y + h:
-                    cr.move_to(x + 4, fy + at - 3)
-                    cr.show_text(str(k))
+        cr.set_source_rgba(1, 1, 1, 0.8)
+        for text, x, y in centimeter_labels(frames, count, per_cm, fx, fy,
+                                            lambda text: cr.text_extents(text).x_advance):
+            cr.move_to(x, y)
+            cr.show_text(text)
 
     def draw_names(self, cr, frames):
         """Each monitor's name in the corner of its frame, on a dark tag; the selected one's is lit."""

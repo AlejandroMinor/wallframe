@@ -18,7 +18,8 @@ from wallframe.daemons import Daemon, Output  # noqa: E402
 from wallframe.layouts import Layouts  # noqa: E402
 from wallframe.monitor import Monitor  # noqa: E402
 from wallframe.state import Store  # noqa: E402
-from wallframe.window import EXPORT_MENU, NUDGE, NUDGE_SHIFT, Window, build_menu, stamp  # noqa: E402
+from wallframe.window import (EXPORT_MENU, LABEL_SIZE, NUDGE, NUDGE_SHIFT, Window,  # noqa: E402
+                              build_menu, centimeter_labels, stamp)
 from gi.repository import Gdk, Gtk  # noqa: E402
 
 NO_DAEMON = "wallframe-no-existe-este-programa"
@@ -663,3 +664,19 @@ def test_the_stamp_is_the_date_and_the_time_to_the_second():
     assert stamp(moment) == "10102026-143207"
     assert stamp(time.struct_time((2026, 10, 10, 14, 32, 8, 5, 283, -1))) != stamp(moment)
 
+
+
+def test_the_centimeter_numbers_stay_inside_their_frames_and_apart():
+    def width_of(text):
+        return 6 * len(text)
+
+    frames = [("DP-1", 0, 0, 300, 200), ("DP-2", 340, 20, 300, 200)]
+    labels = centimeter_labels(frames, 40, 17, 0, 0, width_of)
+    boxes = [(x, y - LABEL_SIZE, x + width_of(text), y) for text, x, y in labels]
+    assert labels and "0" not in [text for text, _x, _y in labels]
+    for left, top, right, bottom in boxes:
+        assert any(x <= left and right <= x + w and y + 26 <= top and bottom <= y + h
+                   for _name, x, y, w, h in frames)  # inside a frame, under its name tag
+    for index, (left, top, right, bottom) in enumerate(boxes):
+        for other in boxes[index + 1:]:
+            assert right <= other[0] or other[2] <= left or bottom <= other[1] or other[3] <= top
