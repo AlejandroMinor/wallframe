@@ -125,6 +125,8 @@ for_window [app_id="io.github.AlejandroMinor.wallframe"] floating enable
 
 Zoom below 100% to see more of the image, or to make it smaller than the monitor. The empty space around it is filled with a copy of the image, blurred as much as you like, or with a color. Both are in the **Fill** panel of the bottom bar. Check **Move background** there (or press `B`) to drag and zoom that copy instead of the image. The **Export** button (the arrow in the top bar) has two ways out. **Export > Picture as it looks** saves exactly what is on the canvas, with its fill, to use it elsewhere. **Fill the empty space with an external AI** is for when you would rather let an image AI paint the empty space: **Picture and mask** saves the picture with the empty space in one solid color, and a mask of that space. If the fill is blur, or your fill color is close to colors in the picture, wallframe asks first: you can cancel and pick another color, or continue, and then it uses the vivid color least present in your picture. It also warns when more than half of the picture is empty space, because the AI invents everything it paints there. Each notice says how much of the picture is empty. **Copy the prompt** copies a ready text with that color and the size of the picture. Give the AI the text and both files, and open the result with `O`. A color that is not in the picture lets the AI tell the empty space from the scene. An AI may retouch your picture, for example a text. If it must stay exact, use a tool that respects the mask: it fills only the white area. If the picture leaves no empty space, there is nothing to fill, and wallframe says so.
 
+![The Export menu: the picture as it looks, or the picture and mask for an external AI, and its prompt](docs/export.webp)
+
 ![A landscape picture zoomed out on a portrait monitor, with the empty space filled by a blurred copy](docs/fill.webp)
 
 A dot on a monitor button means that the monitor does not show your changes yet. Apply crops the image to the exact size of the monitor and sets it with awww (or swww) on that monitor only. The window stays open.
@@ -133,7 +135,7 @@ wallframe saves the crops in `~/.local/share/wallframe/`. It does not use the ca
 
 The **Layouts** panel saves what every monitor shows: the picture and its framing. Each layout has a preview of your monitors as they stand on the desk (on Hyprland and sway; elsewhere side by side). Click a layout to show it on the monitors at once; the one they show is marked. Its menu renames it, saves the current wallpapers into it, duplicates it or deletes it. Layouts point at your pictures: if one was moved or deleted, that monitor stays as it was and wallframe says why, with the path where the picture was.
 
-![The Layouts panel with two saved layouts, one of them marked as the one the monitors show](docs/layouts.webp)
+![The Layouts panel with six saved layouts, one of them marked as the one the monitors show](docs/layouts.webp)
 
 ### One picture across all monitors
 
@@ -168,6 +170,8 @@ All of this is done in the editor, while arranging, with the **Arrange** button 
 3. **Angle.** If the diagonals still look bent, give that monitor an angle: `.` adds 1° and `,` removes 1° (`:` and `;` for 5°). A negative angle does the opposite. If a monitor leans back or forward, `<` and `>` do the same up and down. The angle also changes the separation between the monitors by itself. Step 4 fixes that.
 4. **Separation.** Your real monitors have bezels, so there is a gap between the screens. In the canvas, the distance between two frames is that gap: it decides how much of the picture is skipped between them. Move the frame of the outer monitor with the left and right arrow keys, a few millimeters at a time, until what crosses the join looks like one picture. If it gets worse, go the other way.
 5. **Save it.** The **Desk** tab of the Layouts panel saves the places and the angles under a name. If a monitor moves later, bring the arrangement back with one click. Apply puts it on the monitors.
+
+![The Desk tab of the Layouts panel, with a saved desk arrangement](docs/desk.webp)
 
 Everything you do here can feel backwards, whether it is the arrow keys, dragging a frame or an angle. A frame is a window over the picture, and you move the window, not what you see on the real screen. If you move a frame down, the monitor shows a lower part of the picture, so what you see on the screen goes up. If you give a monitor more angle, its frame gets narrower, so the screen shows a smaller part of the picture and what you see looks bigger.
 
