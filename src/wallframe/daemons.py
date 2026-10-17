@@ -1,6 +1,7 @@
 import re
 from dataclasses import dataclass
 
+from . import config
 from .commands import run, run_or_fail
 
 # ": DP-1: 1080x1920, scale: 1, currently displaying: image: /path/to/file.jpg"
@@ -27,11 +28,34 @@ def parse_query(text):
     return outputs
 
 
+def parse_transitions(text):
+    """The transition types `awww img --help` lists after "Possible transitions are:",
+    as "none | simple | fade | ..." over one or more lines; [] when it lists none."""
+    lines = text.splitlines()
+    start = next((i for i, line in enumerate(lines)
+                  if "possible transitions are" in line.lower()), None)
+    if start is None:
+        return []
+    kinds = []
+    for line in lines[start + 1:]:
+        if kinds and "|" not in line:
+            break  # past the list: the blank line or the text after it
+        kinds += [kind.strip() for kind in line.split("|") if kind.strip()]
+    return kinds
+
+
 class Daemon:
     """awww or swww: both accept the same commands, since awww continues swww."""
 
     def __init__(self, program):
         self.program = program
+        self._transitions = None
+
+    def transitions(self):
+        """The transition types this version knows, asked once; [] when it cannot say."""
+        if self._transitions is None:
+            self._transitions = parse_transitions(run([self.program, "img", "--help"]))
+        return self._transitions
 
     def outputs(self):
         return parse_query(run([self.program, "query"]))
@@ -42,9 +66,11 @@ class Daemon:
         Raises OSError when the daemon refuses it, so the caller can keep the
         crop the output shows now.
         """
-        # A short fade: soft, without keeping the new framing waiting.
-        run_or_fail([self.program, "img", "-o", output, "--resize", "no",
-                     "--transition-type", "fade", "--transition-duration", "0.4", path])
+        options = []
+        for option, value in config.transition().items():
+            options += [f"--transition-{option}", f"{value:g}" if isinstance(value, float)
+                        else str(value)]
+        run_or_fail([self.program, "img", "-o", output, "--resize", "no", *options, path])
 
 
 def detect():

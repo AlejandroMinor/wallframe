@@ -6,7 +6,7 @@ import pytest
 from PIL import Image
 
 from wallframe.daemons import Output
-from wallframe.layouts import PREVIEW_SIZE, Layouts
+from wallframe.layouts import PREVIEW_SIZE, Layouts, pick
 from wallframe.monitor import Monitor
 from wallframe.state import Store
 
@@ -151,3 +151,20 @@ def test_a_save_that_fails_leaves_the_layout_whole_and_nothing_behind(tmp_path, 
         layouts.rename(saved, "Office")
     assert sorted(os.listdir(tmp_path / "layouts")) == before
     assert [layout.name for layout in layouts.all()] == ["Work"]
+
+
+def test_pick_skips_what_the_monitors_show_and_other_monitors(tmp_path):
+    layouts = Layouts(tmp_path / "layouts")
+    monitors = two_monitors(tmp_path)
+    work = layouts.save("Work", monitors)
+    home = layouts.save("Home", monitors[:1])
+    other = layouts.save("Other", [monitor_on(tmp_path, "HDMI-A-1", 1920, 1080,
+                                              wallpaper(tmp_path))])
+    every = layouts.all()
+    first = lambda found: found[0]  # noqa: E731 - takes the place of random.choice
+    names = ["DP-1", "DP-2"]
+    assert pick(every, names, lambda layout: layout.path == work.path, first).path == home.path
+    assert pick(every, names, lambda layout: layout.path == home.path, first).path == work.path
+    # Only the one shown: picked anyway, it is the only one there is.
+    assert pick([work, other], names, lambda layout: True, first).path == work.path
+    assert pick([other], names) is None and pick([], names) is None

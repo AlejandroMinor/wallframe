@@ -146,5 +146,6 @@ def test_every_panel_opens_and_closes(tmp_path):
              ("closed", close_menu("layouts_button")),
              ("fill", open_menu("fill_button")), ("closed", close_menu("fill_button")),
              ("help", open_menu("help_button")), ("closed", close_menu("help_button")),
+             ("settings", open_menu("settings_button")), ("closed", close_menu("settings_button")),
              ("grid", grid)]
     walk(tmp_path, steps)

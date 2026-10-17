@@ -12,7 +12,7 @@ import pytest
 pytest.importorskip("gi")  # only the window needs GTK
 from PIL import Image  # noqa: E402
 
-from wallframe import span, upscalers  # noqa: E402
+from wallframe import config, span, upscalers  # noqa: E402
 from wallframe.commands import Cancel  # noqa: E402
 from wallframe.daemons import Daemon, Output  # noqa: E402
 from wallframe.layouts import Layouts  # noqa: E402
@@ -81,6 +81,7 @@ class StandIn:
         self.move_backdrop = Widget()
         self.grid_button = Widget()
         self.layouts_button = Widget()
+        self.settings_button = Widget()
         self.arrange_button = Widget()
         self.dragged = self.held = self.selected = None
         self.syncing = False
@@ -186,6 +187,91 @@ def test_a_failed_monitor_stays_pending_and_the_others_still_apply(tmp_path):
     assert first.touched                      # it did not apply
     assert not second.touched                 # and it did
     assert os.path.exists(second.shown)
+
+
+def test_post_command_runs_once_after_the_monitors_that_changed(tmp_path, monkeypatch):
+    image = wallpaper(tmp_path)
+    first = monitor_on(tmp_path, "DP-1", 90, 160, image)
+    second = monitor_on(tmp_path, "DP-2", 90, 160, image)
+    first.edit("rotate")
+    second.edit("mirror")
+
+    class OnlyOneWorks:
+        def set_image(self, output, path):
+            if output == "DP-1":
+                raise OSError(None, "awww failed: unknown output: DP-1")
+
+    ran = []
+    monkeypatch.setattr(config, "post_command", lambda: "make-theme")
+    monkeypatch.setattr(config, "run_post_command", lambda *args: ran.append(args))
+    window = StandIn([first, second], OnlyOneWorks())
+    Window.apply_touched(window)
+    assert ran == [("make-theme", image, ["DP-2"])]
+
+    ran.clear()
+    second.edit("mirror")
+    window.daemon = RecordingDaemon()
+    monkeypatch.setattr(config, "post_command", lambda: "")
+    Window.apply_touched(window)
+    assert ran == []                          # none set
+
+
+def test_a_failing_post_command_only_warns(tmp_path, monkeypatch):
+    monitor = monitor_on(tmp_path, "DP-1", 90, 160, wallpaper(tmp_path))
+    monitor.edit("rotate")
+
+    def fails(*_args):
+        raise OSError(None, "post_command failed: exit 1")
+
+    monkeypatch.setattr(config, "post_command", lambda: "false")
+    monkeypatch.setattr(config, "run_post_command", fails)
+    window = StandIn([monitor], RecordingDaemon())
+    Window.apply_touched(window)
+    assert not monitor.touched
+    assert window.flashed[-1] == ("warning", "post_command failed: exit 1")
+
+
+def test_the_settings_panel_lists_the_daemons_transitions_and_saves(tmp_path):
+    class WithTransitions(RecordingDaemon):
+        def transitions(self):
+            return ["simple", "fade", "wipe"]
+
+    window = StandIn([monitor_on(tmp_path, "DP-1", 90, 160, wallpaper(tmp_path))],
+                     WithTransitions())
+    Window.build_settings_popover(window)
+    Window.fill_settings(window)
+    numbers = window.transition_numbers
+    assert window.transition_grid.get_sensitive()
+    assert not window.transition_missing.get_visible()
+    assert window.transition_choice.get_selected_item().get_string() == "fade"  # the default
+    assert numbers["fps"].get_text() == "Auto" and numbers["angle"].get_value() == 45
+    window.transition_choice.set_selected(2)
+    numbers["duration"].set_value(1.5)
+    numbers["fps"].set_value(60)
+    window.post_command.set_text("  notify-send changed  ")
+    Window.save_settings(window)
+    assert config.transition() == {"type": "wipe", "duration": 1.5, "fps": 60, "angle": 45}
+    assert config.post_command() == "notify-send changed"
+    assert window.flashed[-1][0] == "success"
+
+    numbers["fps"].set_value(0)                      # back to Auto: removed
+    window.post_command.set_text("")
+    Window.save_settings(window)
+    assert "fps" not in config.transition() and config.post_command() == ""
+
+
+def test_without_transitions_they_are_greyed_out_and_kept(tmp_path):
+    config.save({"transition_type": "wave", "transition_fps": "144"})
+    window = StandIn([monitor_on(tmp_path, "DP-1", 90, 160, wallpaper(tmp_path))],
+                     RecordingDaemon())             # like Plasma: no transitions()
+    Window.build_settings_popover(window)
+    Window.fill_settings(window)
+    assert not window.transition_grid.get_sensitive()
+    assert window.transition_missing.get_visible()
+    assert window.transition_choice.get_selected_item().get_string() == "wave"
+    window.transition_numbers["fps"].set_value(0)   # cannot happen greyed out, still ignored
+    Window.save_settings(window)
+    assert config.transition() == {"type": "wave", "duration": 0.4, "fps": 144}
 
 
 # --- Copy: it brings more than the message used to say
@@ -682,3 +768,26 @@ def test_the_centimeter_numbers_stay_inside_their_frames_and_apart():
     for index, (left, top, right, bottom) in enumerate(boxes):
         for other in boxes[index + 1:]:
             assert right <= other[0] or other[2] <= left or bottom <= other[1] or other[3] <= top
+
+
+def test_random_layout_says_why_there_is_none(tmp_path):
+    monitor = monitor_on(tmp_path, "DP-1", 90, 160, wallpaper(tmp_path))
+    window = StandIn([monitor], RecordingDaemon())
+    Window.random_layout(window)
+    assert window.flashed[-1] == ("error", "No layouts yet: save one first")
+    elsewhere = monitor_on(tmp_path, "HDMI-A-1", 90, 160, wallpaper(tmp_path))
+    window.layouts.save("Elsewhere", [elsewhere])
+    Window.random_layout(window)
+    assert window.flashed[-1] == ("error", "No layout has these monitors")
+
+
+def test_random_layout_switches_to_another(tmp_path):
+    image = wallpaper(tmp_path)
+    monitor = monitor_on(tmp_path, "DP-1", 90, 160, image)
+    window = StandIn([monitor], RecordingDaemon())
+    monitor.edit("mirror")
+    window.layouts.save("Mirrored", [monitor])
+    monitor.edit("mirror")
+    Window.random_layout(window)
+    assert monitor.framing.flip_h and window.daemon.shown.keys() == {"DP-1"}
+    assert window.flashed[-1] == ("success", "Switched to Mirrored")

@@ -1,5 +1,13 @@
 import pytest
 
+from wallframe import config
+
+
+@pytest.fixture(autouse=True)
+def no_user_config(tmp_path, monkeypatch):
+    """Never the user's own config.ini: its post_command would run in the tests."""
+    monkeypatch.setattr(config, "CONFIG_FILE", str(tmp_path / "config" / "config.ini"))
+
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "ui: shows the window on screen; run with -m ui")

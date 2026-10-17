@@ -10,12 +10,12 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("Pango", "1.0")
 from gi.repository import Gdk, Gio, GLib, GObject, Gtk, Pango  # noqa: E402
 
-from . import calibration, render, upscalers  # noqa: E402
+from . import calibration, config, render, upscalers  # noqa: E402
 from .commands import Cancel, Cancelled  # noqa: E402
 from .framing import BLUR_RANGE, FILLS, MAX_ZOOM  # noqa: E402
 from . import aifill  # noqa: E402
 from .arrangements import Arrangements  # noqa: E402
-from .layouts import Layouts  # noqa: E402
+from .layouts import Layouts, pick  # noqa: E402
 from .monitor import Snapshot  # noqa: E402
 
 APP_ID = "io.github.AlejandroMinor.wallframe"
@@ -24,6 +24,17 @@ ICONS_DIR = os.path.join(os.path.dirname(__file__), "icons")
 MARGIN = 60  # canvas space around the frame, to see what is left out
 ZOOM_STEP = 1.1
 FLASH_MS = 3000  # how long status bar messages stay
+# The transition's numbers in Settings: (key, label, low, high, step, tooltip).
+TRANSITION_NUMBERS = [
+    ("duration", "Duration (s)", 0, 10, 0.1, "Seconds; simple and none ignore it"),
+    ("fps", "Frames per second", 0, 360, 1, "Match your monitor's refresh rate; "
+                                             "Auto is awww's own (30)"),
+    ("step", "Step", 0, 255, 1, "How much it changes each frame: low is smooth, high is "
+                                 "sharp; Auto depends on the type"),
+    ("angle", "Angle (°)", 0, 360, 1, "The direction of wipe and wave"),
+]
+AUTO_NUMBERS = {"fps", "step"}  # 0 shows "Auto" and is not saved
+TRANSITION_UNSET = {"angle": 45}  # awww's own, shown when the file has none
 KEY_ACTIONS = {"h": "mirror", "v": "flip", "r": "rotate", "0": "reset", "KP_0": "reset"}
 DISCARD_KEY = "d"
 ZOOM_KEYS = {"plus": ZOOM_STEP, "equal": ZOOM_STEP, "KP_Add": ZOOM_STEP,
@@ -138,6 +149,14 @@ def icon_button(icon, tooltip, callback, toggle=False):
         icon_name=icon, tooltip_text=tooltip, focusable=False)
     button.connect("toggled" if toggle else "clicked", lambda _b: callback())
     return button
+
+
+def show_auto(spin):
+    """A SpinButton's "output": 0 reads Auto."""
+    if spin.get_value():
+        return False
+    spin.set_text("Auto")
+    return True
 
 
 def pinned_popover(title, content):
@@ -401,8 +420,13 @@ class Window(Gtk.ApplicationWindow):
                                           tooltip_text="Keyboard shortcuts (?)",
                                           popover=self.build_help_popover())
         self.help_button.add_css_class("flat")
+        self.settings_button = Gtk.MenuButton(icon_name="emblem-system-symbolic",
+                                              focusable=False, tooltip_text="Settings",
+                                              popover=self.build_settings_popover())
+        self.settings_button.add_css_class("flat")
         bottom = Gtk.Box(spacing=8, margin_top=6, margin_bottom=6, margin_start=6, margin_end=12)
         bottom.append(self.help_button)
+        bottom.append(self.settings_button)
         self.spinner = Gtk.Spinner(visible=False)  # while Apply or a layout works
         bottom.append(self.spinner)
         bottom.append(self.label)
@@ -439,6 +463,90 @@ class Window(Gtk.ApplicationWindow):
                 grid.attach(Gtk.Label(label=action, xalign=0), 1, row, 1, 1)
                 row += 1
         return pinned_popover("Keyboard shortcuts", grid)
+
+    def build_settings_popover(self):
+        """The effect when the wallpaper changes and the command to run after it,
+        saved in config.ini."""
+        self.transition_choice = Gtk.DropDown.new_from_strings([])
+        self.transition_choice.set_tooltip_text("The effect when the wallpaper changes")
+        self.transition_numbers = {}
+        grid = Gtk.Grid(row_spacing=6, column_spacing=8)
+        grid.attach(Gtk.Label(label="Transition", xalign=0, hexpand=True), 0, 0, 1, 1)
+        grid.attach(self.transition_choice, 1, 0, 1, 1)
+        for row, (key, label, low, high, step, tip) in enumerate(TRANSITION_NUMBERS, 1):
+            spin = Gtk.SpinButton.new_with_range(low, high, step)
+            spin.set_digits(1 if step < 1 else 0)
+            spin.set_tooltip_text(tip)
+            if key in AUTO_NUMBERS:
+                spin.set_numeric(False)  # numeric drops letters, so Auto would never show
+                spin.connect("output", show_auto)
+            self.transition_numbers[key] = spin
+            grid.attach(Gtk.Label(label=label, xalign=0), 0, row, 1, 1)
+            grid.attach(spin, 1, row, 1, 1)
+        self.transition_grid = grid
+        self.transition_missing = Gtk.Label(
+            xalign=0, wrap=True, max_width_chars=60,
+            label="Not available: transitions need awww or swww.")
+        self.transition_missing.add_css_class("dim-label")
+        self.transition_row = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self.transition_row.append(grid)
+        self.transition_row.append(self.transition_missing)
+
+        title = Gtk.Label(label="Run after the wallpaper changes", xalign=0, margin_top=8)
+        self.post_command = Gtk.Entry(placeholder_text='wallust run "$wallpaper"',
+                                      width_chars=48, hexpand=True)
+        self.post_command.connect("activate", lambda _e: self.save_settings())
+        hint = Gtk.Label(xalign=0, wrap=True, max_width_chars=60,
+                         label="A shell command, run once after each Apply or layout switch. "
+                               "$wallpaper is the picture; $WALLFRAME_MONITORS lists the "
+                               "monitors that changed. Leave it empty to run nothing.")
+        hint.add_css_class("dim-label")
+        save = Gtk.Button(label="Save", halign=Gtk.Align.END)
+        save.add_css_class("suggested-action")
+        save.connect("clicked", lambda _b: self.save_settings())
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        for widget in (self.transition_row, title, self.post_command, hint, save):
+            box.append(widget)
+        popover = pinned_popover("Settings", box)
+        # Read each time it opens: the file may have been edited by hand meanwhile.
+        popover.connect("show", lambda _p: self.fill_settings())
+        return popover
+
+    def fill_settings(self):
+        """Puts config.ini's values in the panel. The transitions are the ones the
+        daemon lists; with a daemon without any (Plasma) they are greyed out."""
+        kinds = list(getattr(self.daemon, "transitions", list)())
+        self.transitions_available = bool(kinds)
+        self.transition_grid.set_sensitive(bool(kinds))
+        self.transition_missing.set_visible(not kinds)
+        saved = config.transition()
+        if saved["type"] not in kinds:
+            kinds.append(saved["type"])  # written by hand for another version: kept
+        self.transition_choice.set_model(Gtk.StringList.new(kinds))
+        self.transition_choice.set_selected(kinds.index(saved["type"]))
+        for key, spin in self.transition_numbers.items():
+            spin.set_value(saved.get(key, TRANSITION_UNSET.get(key, 0)))
+            if key in AUTO_NUMBERS:
+                show_auto(spin)  # set_value to the value it has does not redraw the text
+        self.post_command.set_text(config.post_command())
+
+    def save_settings(self):
+        values = {"post_command": self.post_command.get_text()}
+        if self.transitions_available:
+            choice = self.transition_choice.get_selected_item()
+            values["transition_type"] = choice.get_string() if choice else ""
+            for key, spin in self.transition_numbers.items():
+                value = spin.get_value()
+                # 0 is "Auto" for fps and step: removed, so awww picks its own.
+                values[f"transition_{key}"] = (
+                    "" if key in AUTO_NUMBERS and not value else f"{value:g}")
+        try:
+            config.save(values)
+        except OSError as error:
+            self.flash(f"Could not save the settings: {error.strerror or error}", "error")
+            return
+        self.settings_button.popdown()
+        self.flash("Settings saved · used on the next Apply", "success")
 
     def build_ai_popover(self):
         """Upscale with Upscayl, switch between original and upscaled, compare at 1:1.
@@ -591,8 +699,14 @@ class Window(Gtk.ApplicationWindow):
                                     propagate_natural_height=True,
                                     propagate_natural_width=True,
                                     hscrollbar_policy=Gtk.PolicyType.NEVER)
+        # Apart from Save, below the cards: it switches between them, like clicking one.
+        shuffle = Gtk.Button(child=Gtk.Box(spacing=6), halign=Gtk.Align.END, focusable=False,
+                             tooltip_text="Switch to a random layout, never the one shown now")
+        shuffle.get_child().append(Gtk.Image(icon_name="media-playlist-shuffle-symbolic"))
+        shuffle.get_child().append(Gtk.Label(label="Random layout"))
+        shuffle.connect("clicked", lambda _b: self.random_layout())
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        for widget in (row, self.layout_empty, scroll):
+        for widget in (row, self.layout_empty, scroll, Gtk.Separator(), shuffle):
             box.append(widget)
         self.fill_layouts()
         if not self.span:  # the desk needs the span, which needs to know where the monitors are
@@ -706,6 +820,17 @@ class Window(Gtk.ApplicationWindow):
         if span and span.live and not span.touched and not any(m.touched for m in self.monitors):
             return span
         return None
+
+    def random_layout(self):
+        """Switches to a random layout for these monitors, other than the one they show."""
+        layouts = self.layouts.all()
+        layout = pick(layouts, [m.name for m in self.monitors], self.shows_layout)
+        if layout:
+            self.activate_layout(layout)
+        elif layouts:
+            self.flash("No layout has these monitors", "error")
+        else:
+            self.flash("No layouts yet: save one first", "error")
 
     def activate_layout(self, layout):
         """Shows the layout on the monitors right away, and in the editor.
@@ -1705,8 +1830,8 @@ class Window(Gtk.ApplicationWindow):
         key = Gdk.keyval_name(Gdk.keyval_to_lower(keyval))
         if isinstance(self.get_focus(), Gtk.Editable) and key != "Escape":
             return False  # typing a layout's name: H, R or Enter are letters, not actions
-        open_panel = next((b for b in (self.fill_button, self.help_button, self.layouts_button)
-                           if b.get_active()), None)
+        panels = (self.fill_button, self.help_button, self.layouts_button, self.settings_button)
+        open_panel = next((b for b in panels if b.get_active()), None)
         if key == "Escape" and open_panel:
             open_panel.popdown()  # Esc closes the panel, not the whole window
         elif key in HELP_KEYS:
@@ -1846,7 +1971,7 @@ class Window(Gtk.ApplicationWindow):
             return results
 
         def finish(results):
-            failed = []
+            failed, changed = [], []
             for monitor, snapshot, path, error, picture in results:
                 if snapshot:
                     monitor.take(snapshot)
@@ -1855,6 +1980,7 @@ class Window(Gtk.ApplicationWindow):
                         raise error
                     if path:
                         monitor.show(self.daemon, path)
+                        changed.append(monitor)
                 except OSError as failure:
                     reason = ("image not found" if isinstance(failure, FileNotFoundError)
                               else failure.strerror or str(failure))
@@ -1869,8 +1995,31 @@ class Window(Gtk.ApplicationWindow):
             self.refresh()
             self.fill_layouts()  # marks the card of what the monitors show now
             done(failed)
+            if changed:
+                self.run_post_command(changed)
 
         self.in_background(work, finish)
+
+    def run_post_command(self, changed):
+        """Runs config.ini's post_command once the `changed` monitors show their new
+        wallpaper, off the main thread; only a failure is told, in the status bar."""
+        command = config.post_command()
+        if not command:
+            return
+
+        def work():
+            try:
+                config.run_post_command(command, changed[0].original,
+                                        [m.name for m in changed])
+            except OSError as error:
+                return error.strerror or str(error)
+            return None
+
+        def then(failure):
+            if failure:
+                self.flash(failure, "warning")
+
+        self.in_background(work, then)
 
     def in_background(self, work, then):
         """Runs work() on another thread, then then(its result) back on the main one."""

@@ -133,7 +133,7 @@ A dot on a monitor button means that the monitor does not show your changes yet.
 
 wallframe saves the crops in `~/.local/share/wallframe/`. It does not use the cache folder, because the daemon loads the crops from there again at login. When you open wallframe again, each monitor starts from the original image with your last framing, so the image does not lose quality. Animated and video wallpapers are not supported.
 
-The **Layouts** panel saves what every monitor shows: the picture and its framing. Each layout has a preview of your monitors as they stand on the desk (on Hyprland and sway; elsewhere side by side). Click a layout to show it on the monitors at once; the one they show is marked. Its menu renames it, saves the current wallpapers into it, duplicates it or deletes it. Layouts point at your pictures: if one was moved or deleted, that monitor stays as it was and wallframe says why, with the path where the picture was.
+The **Layouts** panel saves what every monitor shows: the picture and its framing. Each layout has a preview of your monitors as they stand on the desk (on Hyprland and sway; elsewhere side by side). Click a layout to show it on the monitors at once; the one they show is marked. Its menu renames it, saves the current wallpapers into it, duplicates it or deletes it. **Random layout**, below the list, switches to a random layout, never the one the monitors show now. Layouts point at your pictures: if one was moved or deleted, that monitor stays as it was and wallframe says why, with the path where the picture was. **Replace picture…** lets you choose another picture, and the layout keeps it with the same framing.
 
 ![The Layouts panel with six saved layouts, one of them marked as the one the monitors show](docs/layouts.webp)
 
@@ -180,6 +180,40 @@ Keep this order: height, angle, separation. Each step changes the next one, so d
 The angle is a simple correction. It stretches the picture but does not model perspective, so lines still bend a little toward the far edge of a turned monitor, and it is only right from one seat. `0` while arranging, or **Reset to default** in the Desk tools menu, puts the monitors back where the compositor has them, with no angle.
 
 > **A friendly tip.** It will not be perfect, so do not chase perfection. Monitors are not as fixed as they look: you clean them, you show something to someone, you adjust them for any reason, and they never come back to the exact same place. Do not spend your time on these exact settings. A close result is enough.
+
+### Settings
+
+Open **Settings** (the gear at the bottom left) to choose the transition and a command to run after the wallpaper changes, then press **Save**. Both are saved in `~/.config/wallframe/config.ini`, so you can also edit the file by hand. wallframe reads it on each Apply, so you do not need to restart it.
+
+```ini
+[Settings]
+transition_type = wipe
+transition_duration = 1.5
+transition_fps = 60
+transition_step = 63
+transition_angle = 30
+post_command = wallust run "$wallpaper"
+```
+
+**Transition.** The effect awww or swww shows when the wallpaper changes. The list comes from your awww or swww version, so it shows every type that version has. The default is a 0.4 second `fade`.
+
+| Setting | What it does |
+| --- | --- |
+| Duration | How many seconds it takes. `simple` and `none` ignore it. |
+| Frames per second | How smooth it looks. Set it to your monitor's refresh rate, for example 60 or 144. **Auto** lets awww choose (30). |
+| Step | How much the picture changes each frame, from 1 to 255. Low is smooth, high is sharp. **Auto** lets awww choose, which depends on the type. |
+| Angle | The direction of `wipe` and `wave`, in degrees. |
+
+KDE Plasma has no transitions, so the settings are greyed out there.
+
+**Command.** `post_command` updates a color theme or anything else when the wallpaper changes. It uses the same name as waypaper. It runs once after each Apply or layout switch, when every monitor shows its new wallpaper. It runs in a shell, with these variables:
+
+| Variable | Value |
+| --- | --- |
+| `$wallpaper` or `$WALLFRAME_WALLPAPER` | The picture, not the crop. With several monitors, the picture of the first one that changed. |
+| `$WALLFRAME_MONITORS` | The monitors that changed, separated by commas, for example `DP-1,HDMI-A-1`. |
+
+Leave it empty to run nothing. If the command fails, the status bar shows a warning, and the wallpaper stays as it is.
 
 ## Development
 

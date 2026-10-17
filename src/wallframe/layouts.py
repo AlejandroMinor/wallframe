@@ -1,5 +1,6 @@
 import json
 import os
+import random
 import time
 
 from PIL import Image
@@ -149,6 +150,14 @@ def _replace(path, write):
         if os.path.exists(temporary):
             os.remove(temporary)
         raise
+
+
+def pick(layouts, names, shown=lambda layout: False, choice=random.choice):
+    """A random layout for the monitors in `names`, other than the ones `shown` says
+    they show now, unless there is no other; None when none has these monitors."""
+    usable = [layout for layout in layouts if set(layout.monitors) & set(names)]
+    others = [layout for layout in usable if not shown(layout)]
+    return choice(others or usable) if usable else None
 
 
 def entries(monitors, span=None):
