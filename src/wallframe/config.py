@@ -47,6 +47,11 @@ def wallpaper_folder(default, path=None):
     return os.path.expanduser(get("wallpaper_folder", path)) or default
 
 
+def wallpaper_subfolders(path=None):
+    """True when the wallpaper picker also shows the folders inside the folder."""
+    return get("wallpaper_subfolders", path).lower() in ("true", "yes", "1")
+
+
 def panel_width(default, path=None):
     """How wide the panel beside the canvas opens, in pixels, as last left."""
     width = _number(get("panel_width", path), int, 1, 10000)

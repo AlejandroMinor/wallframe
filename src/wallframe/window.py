@@ -539,8 +539,21 @@ class Window(Gtk.ApplicationWindow):
         save = Gtk.Button(label="Save", halign=Gtk.Align.END)
         save.add_css_class("suggested-action")
         save.connect("clicked", lambda _b: self.save_settings())
+        cache_title = Gtk.Label(label="Thumbnails of the wallpaper panel", xalign=0,
+                                margin_top=8)
+        self.cache_usage = Gtk.Label(xalign=0, hexpand=True)
+        self.cache_usage.add_css_class("dim-label")
+        clear = Gtk.Button(label="Clear", focusable=False,
+                           tooltip_text="Delete them; they are made again when shown. "
+                                        f"Those not shown in {gallery.UNUSED_DAYS} days "
+                                        "are deleted by themselves.")
+        clear.connect("clicked", lambda _b: self.clear_thumbnails())
+        cache_row = Gtk.Box(spacing=6)
+        cache_row.append(self.cache_usage)
+        cache_row.append(clear)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        for widget in (self.transition_row, title, self.post_command, hint, save):
+        for widget in (self.transition_row, title, self.post_command, hint, cache_title,
+                       cache_row, save):
             box.append(widget)
         popover = pinned_popover("Settings", box)
         # Read each time it opens: the file may have been edited by hand meanwhile.
@@ -564,6 +577,22 @@ class Window(Gtk.ApplicationWindow):
             if key in AUTO_NUMBERS:
                 show_auto(spin)  # set_value to the value it has does not redraw the text
         self.post_command.set_text(config.post_command())
+        self.show_cache_usage()
+
+    def show_cache_usage(self):
+        count, size = gallery.usage()
+        self.cache_usage.set_label(f"{count} kept · {size / 1e6:.1f} MB" if count
+                                   else "None kept")
+
+    def clear_thumbnails(self):
+        """Empties the thumbnail cache; the panel, if shown, makes them again."""
+        gallery.clear()
+        self.gallery_shown = None  # the grid shows deleted files: rebuilt when next shown
+        self.show_cache_usage()
+        if self.side_panel.get_visible() and \
+                self.side_stack.get_visible_child_name() == "wallpapers":
+            self.fill_gallery(force=True)
+        self.flash("Thumbnails cleared", "success")
 
     def save_settings(self):
         values = {"post_command": self.post_command.get_text()}
@@ -811,6 +840,15 @@ class Window(Gtk.ApplicationWindow):
         row.append(self.gallery_folder)
         row.append(reload)
         row.append(open_file)
+        self.gallery_search = Gtk.SearchEntry(placeholder_text="Search by name", hexpand=True)
+        self.gallery_search.connect("search-changed", lambda _e: self.filter_gallery())
+        self.gallery_subfolders = Gtk.CheckButton(label="Subfolders", focusable=False,
+                                                  tooltip_text="Also show the pictures in the "
+                                                               "folders inside this one")
+        self.gallery_subfolders.connect("toggled", lambda _b: self.on_gallery_subfolders())
+        search_row = Gtk.Box(spacing=6)
+        search_row.append(self.gallery_search)
+        search_row.append(self.gallery_subfolders)
         self.gallery_grid = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE,
                                         min_children_per_line=1, max_children_per_line=8,
                                         valign=Gtk.Align.START,
@@ -818,6 +856,7 @@ class Window(Gtk.ApplicationWindow):
                                         activate_on_single_click=True)
         self.gallery_grid.connect("child-activated",
                                   lambda _g, child: self.pick_wallpaper(child.path))
+        self.gallery_grid.set_filter_func(self.gallery_matches)
         double = Gtk.GestureClick()
         double.connect("pressed", lambda _g, presses, _x, _y: presses == 2 and self.apply())
         self.gallery_grid.add_controller(double)
@@ -839,9 +878,10 @@ class Window(Gtk.ApplicationWindow):
         grid_area = Gtk.Overlay(child=scroll)
         grid_area.add_overlay(self.gallery_progress)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        for widget in (row, self.gallery_empty, grid_area, hint):
+        for widget in (row, search_row, self.gallery_empty, grid_area, hint):
             box.append(widget)
-        self.gallery_shown = None  # (folder, pictures) in the grid, to skip a reload
+        self.gallery_shown = None  # (folder, subfolders, pictures) in the grid, to skip a reload
+        self.gallery_pruned = False  # old thumbnails are deleted once a session
         return box
 
     def wallpaper_folder(self):
@@ -852,19 +892,21 @@ class Window(Gtk.ApplicationWindow):
     def fill_gallery(self, force=False):
         """One thumbnail per picture in the folder, newest first. The grid is made at
         once and the thumbnails come in as they are made, off the main thread."""
+        if not self.gallery_pruned:
+            self.gallery_pruned = True
+            self.in_background(gallery.prune, lambda _gone: None)
         folder = self.wallpaper_folder()
+        subfolders = config.wallpaper_subfolders()
         self.gallery_folder_label.set_label(folder.replace(os.path.expanduser("~"), "~", 1))
-        found = gallery.pictures(folder)
-        if not force and self.gallery_shown == (folder, found):
+        self.syncing = True  # set_active calls on_gallery_subfolders, which must not save
+        self.gallery_subfolders.set_active(subfolders)
+        self.syncing = False
+        found = gallery.pictures(folder, subfolders)
+        if not force and self.gallery_shown == (folder, subfolders, found):
             self.mark_gallery()
             return
-        self.gallery_shown = (folder, found)
+        self.gallery_shown = (folder, subfolders, found)
         self.gallery_grid.remove_all()
-        self.gallery_empty.set_visible(not found)
-        self.gallery_empty.set_label(f"No pictures in {os.path.basename(folder) or folder}. "
-                                     "Choose another folder above."
-                                     if os.path.isdir(folder) else
-                                     "This folder does not exist. Choose another one above.")
         pictures, missing = {}, []
         for path in found:
             # Whole, not cropped: a wide or tall picture shows all of itself.
@@ -876,12 +918,13 @@ class Window(Gtk.ApplicationWindow):
                 picture.set_filename(thumb)
             else:
                 missing.append(path)
-            child = Gtk.FlowBoxChild(child=picture, focusable=False,
-                                     tooltip_text=os.path.basename(path))
-            child.path = path
+            name = os.path.relpath(path, folder)  # with its subfolder, when it is in one
+            child = Gtk.FlowBoxChild(child=picture, focusable=False, tooltip_text=name)
+            child.path, child.name = path, name.casefold()
             self.gallery_grid.append(child)
             pictures[path] = picture
         self.mark_gallery()
+        self.filter_gallery()
         self.show_gallery_progress(0, len(missing))
         if not missing:
             return
@@ -913,6 +956,38 @@ class Window(Gtk.ApplicationWindow):
         self.gallery_spinner.set_spinning(busy)
         self.gallery_progress.set_visible(busy)
         self.gallery_count.set_label(f"Making thumbnails… {done} of {total}")
+
+    def gallery_matches(self, child):
+        """True when the picture's name, and subfolder, has every word searched for."""
+        words = self.gallery_search.get_text().casefold().split()
+        return all(word in child.name for word in words)
+
+    def filter_gallery(self):
+        """Shows the pictures that match the search, or says why there are none."""
+        self.gallery_grid.invalidate_filter()
+        folder, _subfolders, found = self.gallery_shown or (self.wallpaper_folder(), False, [])
+        matching = any(self.gallery_matches(child) for child in self.gallery_grid)
+        if not os.path.isdir(folder):
+            empty = "This folder does not exist. Choose another one above."
+        elif not found:
+            empty = (f"No pictures in {os.path.basename(folder) or folder}. "
+                     "Choose another folder above.")
+        elif not matching:
+            empty = f"No pictures match “{self.gallery_search.get_text().strip()}”."
+        else:
+            empty = ""
+        self.gallery_empty.set_label(empty)
+        self.gallery_empty.set_visible(bool(empty))
+
+    def on_gallery_subfolders(self):
+        if self.syncing:
+            return
+        try:
+            config.save({"wallpaper_subfolders":
+                         "true" if self.gallery_subfolders.get_active() else ""})
+        except OSError as error:
+            self.flash(f"Could not save the setting: {error.strerror or error}", "error")
+        self.fill_gallery()
 
     def mark_gallery(self):
         """Marks the picture the monitor or span being edited has, if it is in the grid."""

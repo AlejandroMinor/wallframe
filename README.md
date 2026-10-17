@@ -130,7 +130,7 @@ Zoom below 100% to see more of the image, or to make it smaller than the monitor
 
 ![A landscape picture zoomed out on a portrait monitor, with the empty space filled by a blurred copy](docs/fill.webp)
 
-The **Wallpapers** panel (the pictures folder in the top bar, or `W`) shows the pictures in your wallpaper folder, newest first. Click one to put it on what you are editing: one monitor, or the span. It is centered and waits for Apply, so you can frame it first. Double-click one to apply it at once. The panel opens beside the canvas, so you can try one picture after another and see each one framed. It has a tab for each of Wallpapers, Layouts and, on the span, Desk; the Layouts button opens it on its tab. Drag the divider to make it wider or narrower; it opens that wide the next time. `Esc` closes it. The folder button at the top changes the folder; it starts in your Pictures folder. **Open file…** next to it opens a picture from anywhere else. Thumbnails are kept in `~/.cache/wallframe/thumbnails`, so the panel opens fast the next time. Animated GIFs and videos are not listed.
+The **Wallpapers** panel (the pictures folder in the top bar, or `W`) shows the pictures in your wallpaper folder, newest first. Click one to put it on what you are editing: one monitor, or the span. It is centered and waits for Apply, so you can frame it first. Double-click one to apply it at once. The panel opens beside the canvas, so you can try one picture after another and see each one framed. It has a tab for each of Wallpapers, Layouts and, on the span, Desk; the Layouts button opens it on its tab. Drag the divider to make it wider or narrower; it opens that wide the next time. `Esc` closes it. The folder button at the top changes the folder; it starts in your Pictures folder. **Open file…** next to it opens a picture from anywhere else. Type in **Search by name** to show only the pictures whose name has every word you type. Check **Subfolders** to also show the pictures in the folders inside it; then the search looks at the folder names too. Thumbnails are kept in `~/.cache/wallframe/thumbnails`, so the panel opens fast the next time. Those not shown in 30 days are deleted by themselves, and **Clear** in Settings deletes them all. Animated GIFs and videos are not listed.
 
 A dot on a monitor button means that the monitor does not show your changes yet. Apply crops the image to the exact size of the monitor and sets it with awww (or swww) on that monitor only. The window stays open.
 
@@ -196,6 +196,7 @@ transition_fps = 60
 transition_step = 63
 transition_angle = 30
 wallpaper_folder = ~/Pictures/Wallpapers
+wallpaper_subfolders = true
 post_command = wallust run "$wallpaper"
 ```
 

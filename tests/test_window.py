@@ -12,7 +12,7 @@ import pytest
 pytest.importorskip("gi")  # only the window needs GTK
 from PIL import Image  # noqa: E402
 
-from wallframe import config, span, upscalers  # noqa: E402
+from wallframe import config, gallery, span, upscalers  # noqa: E402
 from wallframe.commands import Cancel  # noqa: E402
 from wallframe.daemons import Daemon, Output  # noqa: E402
 from wallframe.layouts import Layouts  # noqa: E402
@@ -832,3 +832,55 @@ def test_the_wallpaper_panel_says_when_the_folder_is_gone(tmp_path):
     Window.fill_gallery(window)
     assert window.gallery_empty.get_visible()
     assert "does not exist" in window.gallery_empty.get_label()
+
+
+def gallery_window(tmp_path):
+    """A window on a wallpaper folder with sunset.png, beach.png and anime/night city.png."""
+    folder = tmp_path / "walls"
+    (folder / "anime").mkdir(parents=True)
+    pictures = [wallpaper(folder, "sunset.png"), wallpaper(folder, "beach.png"),
+                wallpaper(folder / "anime", "night city.png")]
+    config.save({"wallpaper_folder": str(folder)})
+    window = StandIn([monitor_on(tmp_path, "DP-1", 90, 160, pictures[0])])
+    Window.build_gallery_page(window)
+    Window.fill_gallery(window)
+    return window, pictures
+
+
+def shown_in(window):
+    return sorted(os.path.basename(child.path) for child in window.gallery_grid
+                  if Window.gallery_matches(window, child))
+
+
+def test_the_wallpaper_search_filters_by_name(tmp_path):
+    window, _ = gallery_window(tmp_path)
+    assert shown_in(window) == ["beach.png", "sunset.png"]
+    window.gallery_search.set_text("SUN")
+    Window.filter_gallery(window)
+    assert shown_in(window) == ["sunset.png"] and not window.gallery_empty.get_visible()
+    window.gallery_search.set_text("mountain")
+    Window.filter_gallery(window)
+    assert shown_in(window) == []
+    assert window.gallery_empty.get_label() == "No pictures match “mountain”."
+
+
+def test_subfolders_are_kept_and_searched_by_folder(tmp_path):
+    window, _ = gallery_window(tmp_path)
+    window.gallery_subfolders.set_active(True)          # saves and lists them
+    assert config.wallpaper_subfolders()
+    assert shown_in(window) == ["beach.png", "night city.png", "sunset.png"]
+    window.gallery_search.set_text("anime night")       # every word, folder included
+    Window.filter_gallery(window)
+    assert shown_in(window) == ["night city.png"]
+    window.gallery_subfolders.set_active(False)
+    assert not config.wallpaper_subfolders()
+
+
+def test_clearing_thumbnails_empties_the_cache(tmp_path):
+    window, _ = gallery_window(tmp_path)
+    assert gallery.usage()[0] == 2
+    Window.build_settings_popover(window)
+    Window.clear_thumbnails(window)
+    assert gallery.usage() == (0, 0) and window.gallery_shown is None
+    assert window.cache_usage.get_label() == "None kept"
+    assert window.flashed[-1] == ("success", "Thumbnails cleared")

@@ -38,8 +38,8 @@ def test_thumbnails_are_small_and_made_once(tmp_path):
     with Image.open(thumb) as small:
         assert small.width <= gallery.THUMB_SIZE[0] and small.height <= gallery.THUMB_SIZE[1]
         assert abs(small.width / small.height - 4) < 0.1
-    made = os.stat(thumb).st_mtime_ns
-    assert gallery.thumbnail(path) == thumb and os.stat(thumb).st_mtime_ns == made
+    made = os.stat(thumb).st_ino
+    assert gallery.thumbnail(path) == thumb and os.stat(thumb).st_ino == made  # not remade
 
 
 def test_a_changed_picture_gets_a_new_thumbnail(tmp_path):
@@ -63,3 +63,35 @@ def test_cached_tells_made_thumbnails_apart(tmp_path):
     thumb = gallery.thumbnail(path)
     assert gallery.cached(path) == thumb
     assert gallery.cached(str(tmp_path / "gone.png")) is None
+
+
+def test_subfolders_are_listed_when_asked(tmp_path):
+    top = picture(tmp_path, "top.png", mtime=1_000)
+    (tmp_path / "anime").mkdir()
+    inside = picture(tmp_path / "anime", "inside.png", mtime=2_000)
+    (tmp_path / ".hidden").mkdir()
+    picture(tmp_path / ".hidden", "secret.png", mtime=3_000)
+    assert gallery.pictures(tmp_path) == [top]
+    assert gallery.pictures(tmp_path, subfolders=True) == [inside, top]
+
+
+def test_prune_deletes_only_thumbnails_not_used_lately(tmp_path):
+    old = gallery.thumbnail(picture(tmp_path, "old.png"))
+    recent_picture = picture(tmp_path, "recent.png")
+    recent = gallery.thumbnail(recent_picture)
+    long_ago = 1_000
+    os.utime(old, (long_ago, long_ago))
+    os.utime(recent, (long_ago, long_ago))
+    assert gallery.cached(recent_picture) == recent  # shown again: used now
+    assert gallery.prune() == 1
+    assert not os.path.exists(old) and os.path.exists(recent)
+
+
+def test_usage_and_clear(tmp_path):
+    for name in ("a.png", "b.png"):
+        gallery.thumbnail(picture(tmp_path, name))
+    count, size = gallery.usage()
+    assert count == 2 and size > 0
+    gallery.clear()
+    assert gallery.usage() == (0, 0)
+    assert gallery.usage(str(tmp_path / "no-cache")) == (0, 0)
