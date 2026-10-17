@@ -747,22 +747,34 @@ class Window(Gtk.ApplicationWindow):
         """The panel beside the canvas, hidden until a button shows it: one tab for the
         wallpaper folder, one for the layouts and, on the span, one for the desk."""
         self.side_stack = Gtk.Stack(vexpand=True)
-        # Icons, the ones of the buttons that open each tab, keep the panel narrow when
-        # dragged so; the names are in their tooltips.
         pages = [(self.build_gallery_page(), "wallpapers", "Wallpapers",
                   "folder-pictures-symbolic"),
                  (self.build_layouts_page(), "layouts", "Layouts", "user-bookmarks-symbolic")]
         if self.span:  # the desk needs the span, which needs to know where the monitors are
             pages.append((self.build_desk_page(), "desk", "Desk",
                           "preferences-desktop-display-symbolic"))
+        # The tabs, by hand: a StackSwitcher shows an icon or a name, not both. Each has
+        # the icon of the top bar button that opens it; its name gives way to "…" when
+        # the panel is dragged narrow, so the panel can still be one picture wide.
+        tabs = Gtk.Box(hexpand=True, halign=Gtk.Align.CENTER)
+        tabs.add_css_class("linked")
+        self.side_tabs = {}
         for child, name, title, icon in pages:
-            self.side_stack.add_titled(child, name, title).set_icon_name(icon)
+            self.side_stack.add_titled(child, name, title)
+            label = Gtk.Box(spacing=6)
+            label.append(Gtk.Image(icon_name=icon))
+            label.append(Gtk.Label(label=title, ellipsize=Pango.EllipsizeMode.END))
+            tab = Gtk.ToggleButton(child=label, focusable=False, tooltip_text=title,
+                                   group=next(iter(self.side_tabs.values()), None))
+            tab.connect("toggled", lambda button, name=name:
+                        button.get_active() and self.side_stack.set_visible_child_name(name))
+            tabs.append(tab)
+            self.side_tabs[name] = tab
         self.side_stack.connect("notify::visible-child-name", lambda *_: self.on_side_page())
         close = icon_button("window-close-symbolic", "Close (Esc)", lambda: self.show_side(None))
         close.add_css_class("flat")
         header = Gtk.Box(spacing=6)
-        header.append(Gtk.StackSwitcher(stack=self.side_stack, hexpand=True,
-                                        halign=Gtk.Align.CENTER))
+        header.append(tabs)
         header.append(close)
         panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, visible=False,
                         margin_top=8, margin_bottom=8, margin_start=8, margin_end=8)
@@ -801,6 +813,7 @@ class Window(Gtk.ApplicationWindow):
         """Lights the button of the tab shown, and fills the tab."""
         shown = self.side_panel.get_visible()
         page = self.side_stack.get_visible_child_name()
+        self.side_tabs[page].set_active(True)
         self.side_syncing = True  # set_active calls on_side_button, which must not act
         self.gallery_button.set_active(shown and page == "wallpapers")
         self.layouts_button.set_active(shown and page in ("layouts", "desk"))
