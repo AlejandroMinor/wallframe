@@ -24,6 +24,7 @@ ICONS_DIR = os.path.join(os.path.dirname(__file__), "icons")
 MARGIN = 60  # canvas space around the frame, to see what is left out
 ZOOM_STEP = 1.1
 FLASH_MS = 3000  # how long status bar messages stay
+LAYOUT_CARD = (200, 90)  # a layout's preview in its card: two cards fit the panel's first width
 GALLERY_THUMB = gallery.THUMB_SIZE  # each picture in the wallpaper panel, as made
 # The panel's first width, two in a row: each with the flow box's padding around it,
 # the spacing, the scrollbar and the margins. Dragging the divider changes it.
@@ -157,6 +158,21 @@ def icon_button(icon, tooltip, callback, toggle=False):
         icon_name=icon, tooltip_text=tooltip, focusable=False)
     button.connect("toggled" if toggle else "clicked", lambda _b: callback())
     return button
+
+
+def card_preview(path):
+    """A layout's preview at most LAYOUT_CARD in size, or None when it cannot be read.
+
+    Scaled before it reaches the card: a picture's natural size is its file's, and a
+    wide preview would take a whole row of the grid.
+    """
+    try:
+        small = render.thumbnail(path, max(LAYOUT_CARD))  # RGBA
+    except OSError:
+        return None
+    small.thumbnail(LAYOUT_CARD)
+    return Gdk.MemoryTexture.new(small.width, small.height, Gdk.MemoryFormat.R8G8B8A8,
+                                 GLib.Bytes.new(small.tobytes()), small.width * 4)
 
 
 def show_auto(spin):
@@ -302,10 +318,11 @@ class Window(Gtk.ApplicationWindow):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.top_bar = self.build_top_bar()
         box.append(self.top_bar)
-        # The wallpapers beside the canvas, not over it: each picked picture shows there.
-        # The divider can be dragged; the grid takes as many columns as fit.
-        self.gallery_panel = self.build_gallery_panel()
-        self.split = Gtk.Paned(start_child=self.area, end_child=self.gallery_panel,
+        # Wallpapers, layouts and the desk beside the canvas, not over it: what is picked
+        # there shows on the canvas. The divider can be dragged; the grids take as many
+        # columns as fit.
+        self.side_panel = self.build_side_panel()
+        self.split = Gtk.Paned(start_child=self.area, end_child=self.side_panel,
                                resize_end_child=False, shrink_start_child=False,
                                shrink_end_child=False, vexpand=True)
         box.append(self.split)
@@ -316,6 +333,7 @@ class Window(Gtk.ApplicationWindow):
         self.connect("notify::is-active", self.on_active)
         # Upscayl is a separate program and would outlive the window, still on the GPU.
         self.connect("close-request", lambda _w: self.cancel_upscales(self.upscaling))
+        self.connect("close-request", lambda _w: self.remember_side_width() and False)
         self.select(start)
 
     def build_top_bar(self):
@@ -349,7 +367,8 @@ class Window(Gtk.ApplicationWindow):
         self.gallery_button = icon_button("folder-pictures-symbolic",
                                           "Wallpapers: pick one from your folder, "
                                           "or open a file (W)",
-                                          self.on_gallery_button, toggle=True)
+                                          lambda: self.on_side_button("wallpapers"),
+                                          toggle=True)
         tools.append(self.gallery_button)
         for icon, tip, action in (
                 ("object-flip-horizontal-symbolic", "Mirror (H)", "mirror"),
@@ -399,12 +418,12 @@ class Window(Gtk.ApplicationWindow):
                                        self.on_grid_button, toggle=True)
         self.grid_button.set_active(self.show_grid)
         tools.append(self.grid_button)
-        self.layouts_button = Gtk.MenuButton(icon_name="user-bookmarks-symbolic",
-                                             focusable=False, margin_start=6,
-                                             tooltip_text=("Layouts and desk: save and switch wallpapers, "
-                                                           "or how the monitors stand" if self.span
-                                                           else "Layouts: save and switch wallpapers"),
-                                             popover=self.build_layouts_popover())
+        self.layouts_button = icon_button("user-bookmarks-symbolic",
+                                          "Layouts and desk: save and switch wallpapers, "
+                                          "or how the monitors stand" if self.span
+                                          else "Layouts: save and switch wallpapers",
+                                          lambda: self.on_side_button("layouts"), toggle=True)
+        self.layouts_button.set_margin_start(6)
         tools.append(self.layouts_button)
         self.apply_button = Gtk.Button(label="Apply", focusable=False, margin_start=6,
                                        tooltip_text="Apply the marked monitors (Enter)")
@@ -695,19 +714,90 @@ class Window(Gtk.ApplicationWindow):
             self.flash(f"Could not delete it: {error.strerror or error}", "error")
         self.fill_arrangements()
 
-    def build_gallery_panel(self):
-        """The wallpaper folder as a grid, beside the canvas: a click puts the picture
-        on what is being edited, a monitor or the span, ready to frame; a double click
-        applies it too. Hidden until the Wallpapers button or W shows it."""
-        title = Gtk.Label(xalign=0, hexpand=True)
-        title.set_markup("<b>Wallpapers</b>")
-        close = icon_button("window-close-symbolic", "Close (Esc)",
-                            lambda: self.gallery_button.set_active(False))
+    def build_side_panel(self):
+        """The panel beside the canvas, hidden until a button shows it: one tab for the
+        wallpaper folder, one for the layouts and, on the span, one for the desk."""
+        self.side_stack = Gtk.Stack(vexpand=True)
+        # Icons, the ones of the buttons that open each tab, keep the panel narrow when
+        # dragged so; the names are in their tooltips.
+        pages = [(self.build_gallery_page(), "wallpapers", "Wallpapers",
+                  "folder-pictures-symbolic"),
+                 (self.build_layouts_page(), "layouts", "Layouts", "user-bookmarks-symbolic")]
+        if self.span:  # the desk needs the span, which needs to know where the monitors are
+            pages.append((self.build_desk_page(), "desk", "Desk",
+                          "preferences-desktop-display-symbolic"))
+        for child, name, title, icon in pages:
+            self.side_stack.add_titled(child, name, title).set_icon_name(icon)
+        self.side_stack.connect("notify::visible-child-name", lambda *_: self.on_side_page())
+        close = icon_button("window-close-symbolic", "Close (Esc)", lambda: self.show_side(None))
         close.add_css_class("flat")
         header = Gtk.Box(spacing=6)
-        header.append(title)
+        header.append(Gtk.StackSwitcher(stack=self.side_stack, hexpand=True,
+                                        halign=Gtk.Align.CENTER))
         header.append(close)
-        self.gallery_folder = Gtk.Button(focusable=False, hexpand=True,
+        panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, visible=False,
+                        margin_top=8, margin_bottom=8, margin_start=8, margin_end=8)
+        panel.append(header)
+        panel.append(self.side_stack)
+        self.side_placed = False  # the divider is put once; then it stays where dragged
+        self.side_syncing = False
+        return panel
+
+    def show_side(self, page):
+        """Shows the side panel on `page`, or hides it with None."""
+        if page:
+            if not self.side_placed:
+                self.side_placed = True
+                width = config.panel_width(GALLERY_WIDTH)
+                self.split.set_position(max(GALLERY_CANVAS_MIN, self.split.get_width() - width))
+            self.side_stack.set_visible_child_name(page)
+        else:
+            self.remember_side_width()
+        self.side_panel.set_visible(bool(page))
+        self.on_side_page()
+
+    def remember_side_width(self):
+        """Keeps how wide the panel was left, for the next time wallframe opens it.
+        Its width and not the divider's place, which depends on the window's size."""
+        if not self.side_panel.get_visible():
+            return
+        width = self.split.get_width() - self.split.get_position()
+        if width > 0 and width != config.panel_width(None):
+            try:
+                config.save({"panel_width": width})
+            except OSError:
+                pass  # only a convenience: the panel opens at its first width instead
+
+    def on_side_page(self):
+        """Lights the button of the tab shown, and fills the tab."""
+        shown = self.side_panel.get_visible()
+        page = self.side_stack.get_visible_child_name()
+        self.side_syncing = True  # set_active calls on_side_button, which must not act
+        self.gallery_button.set_active(shown and page == "wallpapers")
+        self.layouts_button.set_active(shown and page in ("layouts", "desk"))
+        self.side_syncing = False
+        if not shown:
+            return
+        if page == "wallpapers":
+            self.fill_gallery()
+        elif page == "desk":
+            self.fill_arrangements()
+
+    def on_side_button(self, page):
+        """The Wallpapers or Layouts button: shows its tab, or hides the panel when the
+        tab is shown already."""
+        if self.side_syncing:
+            return
+        button = self.gallery_button if page == "wallpapers" else self.layouts_button
+        self.show_side(page if button.get_active() else None)
+
+    def build_gallery_page(self):
+        """The wallpaper folder as a grid: a click puts the picture on what is being
+        edited, a monitor or the span, ready to frame; a double click applies it too."""
+        # The path shortens with "…" rather than keep the panel wide.
+        self.gallery_folder_label = Gtk.Label(ellipsize=Pango.EllipsizeMode.START)
+        self.gallery_folder = Gtk.Button(child=self.gallery_folder_label, focusable=False,
+                                         hexpand=True,
                                          tooltip_text="Choose the wallpaper folder")
         self.gallery_folder.connect("clicked", lambda _b: self.choose_gallery_folder())
         reload = icon_button("view-refresh-symbolic", "Look for new pictures",
@@ -748,25 +838,11 @@ class Window(Gtk.ApplicationWindow):
         self.gallery_progress.append(self.gallery_count)
         grid_area = Gtk.Overlay(child=scroll)
         grid_area.add_overlay(self.gallery_progress)
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, visible=False,
-                      margin_top=8, margin_bottom=8, margin_start=8, margin_end=8)
-        for widget in (header, row, self.gallery_empty, grid_area, hint):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        for widget in (row, self.gallery_empty, grid_area, hint):
             box.append(widget)
         self.gallery_shown = None  # (folder, pictures) in the grid, to skip a reload
-        self.gallery_placed = False  # the divider is put once; then it stays where dragged
         return box
-
-    def on_gallery_button(self):
-        """Shows or hides the wallpapers beside the canvas."""
-        shown = self.gallery_button.get_active()
-        self.gallery_panel.set_visible(shown)
-        if not shown:
-            return
-        if not self.gallery_placed:
-            self.gallery_placed = True
-            self.split.set_position(max(GALLERY_CANVAS_MIN,
-                                        self.split.get_width() - GALLERY_WIDTH))
-        self.fill_gallery()
 
     def wallpaper_folder(self):
         pictures = (GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_PICTURES)
@@ -777,7 +853,7 @@ class Window(Gtk.ApplicationWindow):
         """One thumbnail per picture in the folder, newest first. The grid is made at
         once and the thumbnails come in as they are made, off the main thread."""
         folder = self.wallpaper_folder()
-        self.gallery_folder.set_label(folder.replace(os.path.expanduser("~"), "~", 1))
+        self.gallery_folder_label.set_label(folder.replace(os.path.expanduser("~"), "~", 1))
         found = gallery.pictures(folder)
         if not force and self.gallery_shown == (folder, found):
             self.mark_gallery()
@@ -874,7 +950,7 @@ class Window(Gtk.ApplicationWindow):
 
         dialog.select_folder(self, None, chosen)
 
-    def build_layouts_popover(self):
+    def build_layouts_page(self):
         """Save what the monitors show, and switch to a saved layout with one click."""
         self.layout_name = Gtk.Entry(placeholder_text="Name", hexpand=True)
         self.layout_name.connect("activate", lambda _e: self.save_layout())
@@ -885,14 +961,13 @@ class Window(Gtk.ApplicationWindow):
         row.append(self.layout_name)
         row.append(save)
         self.layout_list = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE,
-                                       max_children_per_line=2, min_children_per_line=1,
-                                       row_spacing=6, column_spacing=6, homogeneous=True)
+                                       max_children_per_line=8, min_children_per_line=1,
+                                       row_spacing=6, column_spacing=6, homogeneous=True,
+                                       valign=Gtk.Align.START)
         self.layout_empty = Gtk.Label(label="No layouts yet. Saving one keeps the picture\n"
                                             "and framing of every monitor.", xalign=0)
         self.layout_empty.add_css_class("dim-label")
-        scroll = Gtk.ScrolledWindow(child=self.layout_list, max_content_height=460,
-                                    propagate_natural_height=True,
-                                    propagate_natural_width=True,
+        scroll = Gtk.ScrolledWindow(child=self.layout_list, vexpand=True,
                                     hscrollbar_policy=Gtk.PolicyType.NEVER)
         # Apart from Save, below the cards: it switches between them, like clicking one.
         shuffle = Gtk.Button(child=Gtk.Box(spacing=6), halign=Gtk.Align.END, focusable=False,
@@ -904,18 +979,7 @@ class Window(Gtk.ApplicationWindow):
         for widget in (row, self.layout_empty, scroll, Gtk.Separator(), shuffle):
             box.append(widget)
         self.fill_layouts()
-        if not self.span:  # the desk needs the span, which needs to know where the monitors are
-            return pinned_popover("Layouts", box)
-        # Each tab as big as it needs: the desk is a short list, the layouts are cards.
-        stack = Gtk.Stack(hhomogeneous=False, vhomogeneous=False)
-        stack.add_titled(box, "layouts", "Layouts")
-        stack.add_titled(self.build_desk_page(), "desk", "Desk")
-        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        content.append(Gtk.StackSwitcher(stack=stack, halign=Gtk.Align.CENTER))
-        content.append(stack)
-        popover = pinned_popover("Saved", content)
-        popover.connect("show", lambda _p: self.fill_arrangements())
-        return popover
+        return box
 
     def fill_layouts(self):
         """One card per layout: click it to apply, ⋯ to rename, update, copy or delete."""
@@ -923,9 +987,9 @@ class Window(Gtk.ApplicationWindow):
         layouts = self.layouts.all()
         self.layout_empty.set_visible(not layouts)
         for layout in layouts:
-            picture = Gtk.Picture.new_for_filename(layout.preview)
-            picture.set_content_fit(Gtk.ContentFit.CONTAIN)
-            picture.set_size_request(170, 76)
+            picture = Gtk.Picture(paintable=card_preview(layout.preview),
+                                  content_fit=Gtk.ContentFit.CONTAIN,
+                                  width_request=LAYOUT_CARD[0], height_request=LAYOUT_CARD[1])
             name = Gtk.Label(label=layout.name, ellipsize=Pango.EllipsizeMode.END,
                              max_width_chars=18)
             content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
@@ -2025,12 +2089,12 @@ class Window(Gtk.ApplicationWindow):
         key = Gdk.keyval_name(Gdk.keyval_to_lower(keyval))
         if isinstance(self.get_focus(), Gtk.Editable) and key != "Escape":
             return False  # typing a layout's name: H, R or Enter are letters, not actions
-        panels = (self.fill_button, self.help_button, self.layouts_button, self.settings_button)
+        panels = (self.fill_button, self.help_button, self.settings_button)
         open_panel = next((b for b in panels if b.get_active()), None)
         if key == "Escape" and open_panel:
             open_panel.popdown()  # Esc closes the panel, not the whole window
-        elif key == "Escape" and self.gallery_button.get_active():
-            self.gallery_button.set_active(False)  # then the wallpapers beside the canvas
+        elif key == "Escape" and self.side_panel.get_visible():
+            self.show_side(None)  # then the panel beside the canvas
         elif key in HELP_KEYS:
             self.help_button.set_active(not self.help_button.get_active())
         elif key == "Escape":
@@ -2044,7 +2108,7 @@ class Window(Gtk.ApplicationWindow):
         elif key == DISCARD_KEY:
             self.discard()
         elif key == "w":
-            self.gallery_button.set_active(not self.gallery_button.get_active())
+            self.gallery_button.set_active(not self.gallery_button.get_active())  # its tab
         elif key == "o":
             self.choose_image()
         elif key == "g":

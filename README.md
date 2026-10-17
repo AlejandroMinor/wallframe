@@ -112,14 +112,14 @@ for_window [app_id="io.github.AlejandroMinor.wallframe"] floating enable
 | Discard changes since the last Apply | Toolbar | `D` |
 | Copy from another monitor: everything, or just the fill | Toolbar | |
 | Rule-of-thirds grid; in the span, also of the whole picture, and the desk's centimeters while arranging | Toolbar | `G` |
-| Save or switch layouts | Layouts button | |
+| Save or switch layouts | Layouts button, or the Layouts tab beside the canvas | |
 | Next monitor, or the span | Monitor buttons | `Tab` |
 | Arrange the monitors of the span as on your desk | Toolbar, in the span | `M` |
 | Show the calibration guide on the span | Desk tools (the tools icon) | |
 | Put the monitors back where the desktop has them | Desk tools (the tools icon), or `0` while arranging | |
 | Turn the selected monitor by its real angle | Keys, while arranging | `.` / `,` (Shift: 5°) |
 | Tilt the selected monitor up or down | Keys, while arranging | `<` / `>` |
-| Save or bring back where the monitors stand | Layouts panel, Desk tab | |
+| Save or bring back where the monitors stand | Desk tab beside the canvas | |
 | Apply to the marked monitors | Apply | `Enter` |
 | Show all keyboard shortcuts | Keyboard button, bottom left | `?` / `F1` |
 | Close | | `Esc` |
@@ -130,7 +130,7 @@ Zoom below 100% to see more of the image, or to make it smaller than the monitor
 
 ![A landscape picture zoomed out on a portrait monitor, with the empty space filled by a blurred copy](docs/fill.webp)
 
-The **Wallpapers** panel (the pictures folder in the top bar, or `W`) shows the pictures in your wallpaper folder, newest first. Click one to put it on what you are editing: one monitor, or the span. It is centered and waits for Apply, so you can frame it first. Double-click one to apply it at once. The panel opens beside the canvas, so you can try one picture after another and see each one framed. Drag the divider to make it wider or narrower, and `Esc` closes it. The folder button at the top changes the folder; it starts in your Pictures folder. **Open file…** next to it opens a picture from anywhere else. Thumbnails are kept in `~/.cache/wallframe/thumbnails`, so the panel opens fast the next time. Animated GIFs and videos are not listed.
+The **Wallpapers** panel (the pictures folder in the top bar, or `W`) shows the pictures in your wallpaper folder, newest first. Click one to put it on what you are editing: one monitor, or the span. It is centered and waits for Apply, so you can frame it first. Double-click one to apply it at once. The panel opens beside the canvas, so you can try one picture after another and see each one framed. It has a tab for each of Wallpapers, Layouts and, on the span, Desk; the Layouts button opens it on its tab. Drag the divider to make it wider or narrower; it opens that wide the next time. `Esc` closes it. The folder button at the top changes the folder; it starts in your Pictures folder. **Open file…** next to it opens a picture from anywhere else. Thumbnails are kept in `~/.cache/wallframe/thumbnails`, so the panel opens fast the next time. Animated GIFs and videos are not listed.
 
 A dot on a monitor button means that the monitor does not show your changes yet. Apply crops the image to the exact size of the monitor and sets it with awww (or swww) on that monitor only. The window stays open.
 

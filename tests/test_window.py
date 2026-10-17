@@ -48,6 +48,9 @@ class Widget:
     def popdown(self):
         self.active = False
 
+    def get_visible(self):
+        return self.active
+
 
 class Bar:
     """Stands in for the progress bar, which only records what it is told."""
@@ -83,6 +86,7 @@ class StandIn:
         self.layouts_button = Widget()
         self.settings_button = Widget()
         self.gallery_button = Widget()
+        self.side_panel = Widget()  # hidden: Esc goes on to close the window
         self.arrange_button = Widget()
         self.dragged = self.held = self.selected = None
         self.syncing = False
@@ -539,7 +543,7 @@ def test_the_layouts_panel_really_builds(tmp_path):
     monitor.edit("mirror")
     window.layouts.save("Mirrored", [monitor])
     monitor.edit("mirror")                              # the monitor shows Desk
-    assert Window.build_layouts_popover(window) is not None
+    assert Window.build_layouts_page(window) is not None
     Window.fill_layouts(window)                         # the stand-in skips it elsewhere
     cards = [child.get_child().get_child() for child in window.layout_list]
     assert len(cards) == 2 and not window.layout_empty.get_visible()
@@ -802,7 +806,7 @@ def test_the_wallpaper_panel_frames_a_picture_on_what_is_edited(tmp_path):
     config.save({"wallpaper_folder": str(folder)})
     monitor = monitor_on(tmp_path, "DP-1", 90, 160, first)
     window = StandIn([monitor], RecordingDaemon())
-    Window.build_gallery_panel(window)
+    Window.build_gallery_page(window)
     Window.fill_gallery(window)
     shown = [child.path for child in window.gallery_grid]
     assert sorted(shown) == sorted([first, second])
@@ -824,7 +828,7 @@ def test_the_wallpaper_panel_frames_a_picture_on_what_is_edited(tmp_path):
 def test_the_wallpaper_panel_says_when_the_folder_is_gone(tmp_path):
     config.save({"wallpaper_folder": str(tmp_path / "missing")})
     window = StandIn([monitor_on(tmp_path, "DP-1", 90, 160, wallpaper(tmp_path))])
-    Window.build_gallery_panel(window)
+    Window.build_gallery_page(window)
     Window.fill_gallery(window)
     assert window.gallery_empty.get_visible()
     assert "does not exist" in window.gallery_empty.get_label()

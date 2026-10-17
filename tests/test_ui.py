@@ -17,7 +17,7 @@ from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
 
 from test_real_window import SIZES, Daemon  # noqa: E402
 from test_span import two_monitors  # noqa: E402
-from wallframe import span  # noqa: E402
+from wallframe import config, span  # noqa: E402
 from wallframe.layouts import Layouts  # noqa: E402
 from wallframe.window import Window  # noqa: E402
 
@@ -33,19 +33,6 @@ def press(window, name, times=1, shift=False):
     state = Gdk.ModifierType.SHIFT_MASK if shift else 0
     for _ in range(times):
         window.on_key(None, Gdk.keyval_from_name(name), 0, state)
-
-
-def stack_in(widget):
-    """The first Gtk.Stack inside `widget`."""
-    child = widget.get_first_child()
-    while child:
-        if isinstance(child, Gtk.Stack):
-            return child
-        found = stack_in(child)
-        if found:
-            return found
-        child = child.get_next_sibling()
-    return None
 
 
 def photograph(window, path):
@@ -130,19 +117,33 @@ def test_every_panel_opens_and_closes(tmp_path):
     def close_menu(button):
         return lambda window: getattr(window, button).popdown()
 
-    def desk_tab(window):
-        stack = stack_in(window.layouts_button.get_popover())
-        stack.set_visible_child_name("desk")
-        assert stack.get_visible_child_name() == "desk"
-
-    def wallpapers(shown):
+    def side(page):
+        """Opens the side panel on `page` with its button, or closes it with Esc."""
         def step(window):
-            if shown:
-                window.gallery_button.set_active(True)
+            if page:
+                button = window.gallery_button if page == "wallpapers" else window.layouts_button
+                button.set_active(True)
+                assert window.side_stack.get_visible_child_name() == page
             else:
                 press(window, "Escape")
-            assert window.gallery_panel.get_visible() == shown
+            assert window.side_panel.get_visible() == bool(page)
         return step
+
+    def narrower(window):
+        window.split.set_position(window.split.get_width() - 1)  # as narrow as it goes
+
+    def reopened(window):
+        narrow = config.panel_width(None)            # kept when the panel closed
+        assert narrow < 400                          # one column of pictures fits
+        window.split.set_position(window.split.get_width() - 500)
+        window.side_placed = False                   # as in a new window: read from the file
+        window.gallery_button.set_active(True)
+        assert window.split.get_width() - window.split.get_position() == narrow
+        press(window, "Escape")
+
+    def desk_tab(window):
+        window.side_stack.set_visible_child_name("desk")
+        assert window.layouts_button.get_active() and not window.gallery_button.get_active()
 
     def grid(window):
         before = window.grid_button.get_active()
@@ -151,11 +152,11 @@ def test_every_panel_opens_and_closes(tmp_path):
 
     steps = [("export-menu", open_menu("export_button")), ("closed", close_menu("export_button")),
              ("desk-tools", open_menu("desk_button")), ("closed", close_menu("desk_button")),
-             ("layouts", open_menu("layouts_button")), ("desk-tab", desk_tab),
-             ("closed", close_menu("layouts_button")),
+             ("layouts", side("layouts")), ("desk-tab", desk_tab),
+             ("wallpapers", side("wallpapers")), ("narrower", narrower), ("closed", side(None)),
+             ("reopened", reopened),
              ("fill", open_menu("fill_button")), ("closed", close_menu("fill_button")),
              ("help", open_menu("help_button")), ("closed", close_menu("help_button")),
              ("settings", open_menu("settings_button")), ("closed", close_menu("settings_button")),
-             ("wallpapers", wallpapers(True)), ("closed", wallpapers(False)),
              ("grid", grid)]
     walk(tmp_path, steps)

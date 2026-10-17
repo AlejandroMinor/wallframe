@@ -47,6 +47,12 @@ def wallpaper_folder(default, path=None):
     return os.path.expanduser(get("wallpaper_folder", path)) or default
 
 
+def panel_width(default, path=None):
+    """How wide the panel beside the canvas opens, in pixels, as last left."""
+    width = _number(get("panel_width", path), int, 1, 10000)
+    return default if width is None else width
+
+
 def transition(path=None):
     """{option: value} of the effect awww or swww shows when the wallpaper changes.
 

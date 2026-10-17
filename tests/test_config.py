@@ -67,3 +67,9 @@ def test_bad_numbers_fall_back_to_the_defaults(tmp_path, value):
     path = write(tmp_path, f"[Settings]\ntransition_duration = {value}\n"
                            f"transition_fps = {value}\ntransition_step = {value}\n")
     assert config.transition(path) == {"type": "fade", "duration": 0.4}
+
+
+def test_panel_width_falls_back_to_the_default(tmp_path):
+    assert config.panel_width(550, str(tmp_path / "missing.ini")) == 550
+    assert config.panel_width(550, write(tmp_path, "[Settings]\npanel_width = 320\n")) == 320
+    assert config.panel_width(550, write(tmp_path, "[Settings]\npanel_width = wide\n")) == 550
