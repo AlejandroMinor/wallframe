@@ -10,6 +10,7 @@ from .monitor import PREVIEW_MAX, Picture, Snapshot
 ASPECT_SLACK = 0.1  # an EDID size this far off the monitor's shape is not trusted
 YAW_LIMIT = 75      # degrees either way: past this a monitor shows next to nothing
 ALIGNED = 2         # logical pixels: edges this close count as lined up on the desktop
+SIZE_SLACK = 0.02   # saved sizes this close to one scale of today's are the same monitors
 
 
 def make(monitors, positions, saved=None, sizes=None):
@@ -171,10 +172,9 @@ class Span(Picture):
         """
         source = saved["source"]
         size = render.image_size(source)
-        places = saved.get("places", {})
-        if set(places) == set(self.places):  # the sizes come from the monitors, as now
-            self.places = {name: (*places[name][:2], *self.default[name][2:])
-                           for name in self.places}
+        places = self._rescaled(saved.get("places", {}))
+        if places:
+            self.places = places
             self.yaws = self._angles(saved.get("yaws"))
             self.pitches = self._angles(saved.get("pitches"))
         else:
@@ -209,6 +209,23 @@ class Span(Picture):
         if self.original != self.image:
             entry["original"] = self.original
         return entry
+
+    def _rescaled(self, saved):
+        """Saved places, in today's span units, with the sizes the monitors have now.
+
+        Span units are the first monitor's pixels, so they change when another monitor
+        comes first or its size does: the saved places are scaled by as much as the
+        monitors grew. None when they are not for these monitors, or the monitors did
+        not all grow alike (real sizes found or lost), so the places no longer fit.
+        """
+        if set(saved) != set(self.places) or any(saved[name][2] <= 0 for name in saved):
+            return None
+        ratios = [self.default[name][2] / saved[name][2] for name in self.places]
+        if max(ratios) - min(ratios) > SIZE_SLACK * min(ratios):
+            return None
+        scale = sum(ratios) / len(ratios)
+        return {name: (saved[name][0] * scale, saved[name][1] * scale, *self.default[name][2:])
+                for name in self.places}
 
     def _angles(self, saved):
         """The angles of a saved entry that are for these monitors, and not zero."""
@@ -252,9 +269,10 @@ class Span(Picture):
         try:
             if sorted(entry["monitors"]) != sorted(self.places):
                 return False
-            places = {name: (*entry["places"][name][:2], *self.default[name][2:])
-                      for name in self.places}
+            places = self._rescaled(entry["places"])
         except (KeyError, TypeError, ValueError):
+            return False
+        if not places:
             return False
         self.arrange(places)  # first, so the angles are checked against the same monitors
         self.yaws = self._angles(entry.get("yaws"))

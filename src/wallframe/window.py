@@ -227,6 +227,15 @@ def describe(monitor):
     return [monitor.model, f"{monitor.width}x{monitor.height}", orientation]
 
 
+
+def image_filters():
+    """The file list and default filter of a dialog that opens pictures."""
+    images = Gtk.FileFilter(name="Images")
+    images.add_mime_type("image/*")
+    filters = Gio.ListStore.new(Gtk.FileFilter)
+    filters.append(images)
+    return filters, images
+
 class Window(Gtk.ApplicationWindow):
     def __init__(self, app, monitors, daemon, start, focused, upscaler=None, layouts=None,
                  positions=None, span=None):
@@ -714,14 +723,49 @@ class Window(Gtk.ApplicationWindow):
 
         def done(failed):
             self.after_layout(layout)
-            if failed:
-                self.flash(f"Could not load all of {layout.name}", "error")
-                self.report(f"Could not load all of {layout.name}",
-                            "\n\n".join(failed) + "\n\nThe other monitors switched.")
-            else:
+            if not failed:
                 self.flash(f"Switched to {layout.name}", "success")
+                return
+            self.flash(f"Could not load all of {layout.name}", "error")
+            missing = layout.missing_images([m.name for m, _entry in jobs])
+            self.report(f"Could not load all of {layout.name}",
+                        "\n\n".join(failed) + "\n\nThe other monitors switched.",
+                        ("Replace picture…", lambda: self.replace_pictures(layout, missing))
+                        if missing else None)
 
         self.apply_monitors(jobs, layout.name, done)
+
+    def replace_pictures(self, layout, missing):
+        """Asks for a picture in place of each one in `missing`, one after another,
+        saves them in the layout and switches to it again. Cancelling one stops there,
+        keeping the ones already chosen."""
+        if not missing:
+            self.fill_layouts()
+            self.activate_layout(layout)
+            return
+        old, rest = missing[0], missing[1:]
+        filters, images = image_filters()
+        dialog = Gtk.FileDialog(title=f"Replace {os.path.basename(old)} in {layout.name}",
+                                filters=filters, default_filter=images, modal=False)
+        folder = os.path.dirname(old)
+        if os.path.isdir(folder):
+            dialog.set_initial_folder(Gio.File.new_for_path(folder))
+
+        def chosen(dialog, result):
+            try:
+                path = dialog.open_finish(result).get_path()
+            except GLib.Error:  # cancelled
+                self.fill_layouts()
+                return
+            try:
+                updated = self.layouts.replace_image(layout, old, path)
+            except OSError as error:
+                self.flash(f"Could not change {layout.name}: {error.strerror or error}",
+                           "error")
+                return
+            self.replace_pictures(updated, rest)
+
+        dialog.open(self, None, chosen)
 
     def after_layout(self, layout):
         """Puts the layout's span in the editor, when it has one for these monitors;
@@ -752,9 +796,24 @@ class Window(Gtk.ApplicationWindow):
         known = [m for m in self.monitors if m.name in layout.monitors]
         return bool(known) and all(m.shows(layout.monitors[m.name]) for m in known)
 
-    def report(self, message, detail):
-        """An error with more to say than the status bar holds."""
-        Gtk.AlertDialog(message=message, detail=detail).show(self)
+    def report(self, message, detail, action=None):
+        """An error with more to say than the status bar holds; an (label, callback)
+        `action` adds a button that runs callback()."""
+        if not action:
+            Gtk.AlertDialog(message=message, detail=detail).show(self)
+            return
+        label, then = action
+        dialog = Gtk.AlertDialog(message=message, detail=detail, buttons=["Close", label],
+                                 cancel_button=0, default_button=1)
+
+        def answered(dialog, result):
+            try:
+                if dialog.choose_finish(result) == 1:
+                    then()
+            except GLib.Error:  # closed with Esc
+                pass
+
+        dialog.choose(self, None, answered)
 
     def build_fill_popover(self):
         """Fill kind, blur strength, background moving and color, in one panel."""
@@ -1503,10 +1562,7 @@ class Window(Gtk.ApplicationWindow):
 
     def choose_image(self):
         """Asks for a picture, starting in the folder of the one shown now."""
-        images = Gtk.FileFilter(name="Images")
-        images.add_mime_type("image/*")
-        filters = Gio.ListStore.new(Gtk.FileFilter)
-        filters.append(images)
+        filters, images = image_filters()
         dialog = Gtk.FileDialog(title=f"Open an image for {self.monitor.name}",
                                 filters=filters, default_filter=images, modal=False,
                                 initial_folder=Gio.File.new_for_path(

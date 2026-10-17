@@ -121,8 +121,9 @@ class StandIn:
     def flash(self, text, style):
         self.flashed.append((style, text))
 
-    def report(self, message, detail):
+    def report(self, message, detail, action=None):
         self.reported.append((message, detail))
+        self.action = action
 
     def close(self):
         self.closed = True
@@ -369,6 +370,7 @@ def test_a_layout_with_a_missing_picture_still_applies_the_rest(tmp_path):
     assert window.reported == [("Could not load all of Two",
                                 f"DP-1: image not found\n{gone}\n\n"
                                 "The other monitors switched.")]
+    assert window.action[0] == "Replace picture…"
 
 
 def test_a_picture_that_is_not_an_image_changes_nothing(tmp_path):

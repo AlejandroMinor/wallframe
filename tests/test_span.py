@@ -168,6 +168,33 @@ def test_a_saved_span_whose_picture_is_gone_starts_from_the_first_monitor(tmp_pa
     assert whole.image == monitors[0].image
 
 
+def test_saved_places_follow_when_another_monitor_comes_first(tmp_path):
+    """Span units are the first monitor's pixels: with the smaller DP-2 first, every
+    saved place is twice as far, so the monitors stand apart as they did."""
+    monitors, positions = two_monitors(tmp_path)
+    sizes = {"DP-1": (600, 300), "DP-2": (300, 150)}  # DP-1 twice as big as DP-2
+    whole = span.make(monitors, positions, sizes=sizes)
+    whole.arrange({"DP-1": (0, 30, 200, 100), "DP-2": (250, 0, 100, 50)})
+    whole.set_yaw("DP-1", 20)
+    saved, arrangement = whole.snapshot(), whole.arrangement()
+
+    again = monitors[::-1]
+    expected = {"DP-1": (0, 60, 400, 200), "DP-2": (500, 0, 200, 100)}
+    resumed = span.make(again, positions, saved, sizes)
+    assert resumed.places == expected and resumed.yaws == {"DP-1": 20}
+    other = span.make(again, positions, sizes=sizes)
+    assert other.use_arrangement(arrangement) and other.places == expected
+
+
+def test_saved_places_for_other_sizes_are_dropped(tmp_path):
+    """Only DP-1 grew (real sizes found): the saved places no longer fit."""
+    monitors, positions = two_monitors(tmp_path)
+    saved = span.make(monitors, positions).arrangement()
+    sizes = {"DP-1": (600, 300), "DP-2": (300, 150)}
+    whole = span.make(monitors, positions, sizes=sizes)
+    assert not whole.use_arrangement(saved) and whole.places == whole.default
+
+
 def test_a_layout_keeps_the_span_and_each_piece(tmp_path):
     monitors, positions = two_monitors(tmp_path)
     whole = span.make(monitors, positions)

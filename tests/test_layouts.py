@@ -93,6 +93,29 @@ def test_pictures_in_layouts_are_never_cleaned_away(tmp_path):
     assert layouts.images_in_use() == {upscaled, monitors[0].original, monitors[1].image}
 
 
+def test_a_missing_picture_can_be_replaced_keeping_the_framing(tmp_path):
+    monitors = two_monitors(tmp_path)
+    monitors[0].edit("mirror")
+    upscaled = wallpaper(tmp_path, "b-x2.png", size=(800, 400))
+    monitors[1].use_upscaled(upscaled)
+    layouts = Layouts(tmp_path / "layouts")
+    saved = layouts.save("Work", monitors)
+    os.remove(monitors[0].image)
+    os.remove(upscaled)
+    assert saved.missing_images(["DP-1", "DP-2"]) == [monitors[0].image, upscaled]
+    assert saved.missing_images(["DP-2"]) == [upscaled]
+
+    new = wallpaper(tmp_path, "c.png", size=(300, 300))
+    layouts.replace_image(saved, monitors[0].image, new)
+    updated = layouts.replace_image(layouts.all()[0], monitors[1].original, new)
+    assert updated.missing_images(["DP-1", "DP-2"]) == []
+    (reread,) = layouts.all()
+    assert reread.monitors["DP-1"]["source"] == new and reread.monitors["DP-1"]["flip_h"]
+    assert reread.monitors["DP-2"] == {key: value for key, value in saved.monitors["DP-2"].items()
+                                       if key != "original"} | {"source": new}
+    assert reread.name == "Work" and os.path.exists(reread.preview)
+
+
 def test_broken_files_are_skipped(tmp_path):
     folder = tmp_path / "layouts"
     folder.mkdir()

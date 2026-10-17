@@ -28,6 +28,17 @@ class Layout:
         """The PNG with every monitor in its place, as seen from afar."""
         return self.path[:-len(".json")] + ".png"
 
+    def missing_images(self, names):
+        """The pictures of the monitors in `names`, and of the span, that are gone."""
+        entries = [self.monitors[name] for name in names if name in self.monitors]
+        if self.span:
+            entries.append(self.span)
+        missing = []
+        for entry in entries:
+            if not os.path.exists(entry["source"]) and entry["source"] not in missing:
+                missing.append(entry["source"])
+        return missing
+
 
 class Layouts:
     """The layouts folder: one JSON file and one preview PNG per layout."""
@@ -74,6 +85,21 @@ class Layouts:
 
     def rename(self, layout, name):
         return self._write(layout.path, name, layout.monitors, span=layout.span)
+
+    def replace_image(self, layout, old, new):
+        """Points every entry that shows `old` at `new`, keeping how it is framed.
+
+        An upscaled copy is dropped along with its picture: `new` is the original now.
+        """
+        def replaced(entry):
+            if old not in (entry.get("source"), entry.get("original")):
+                return entry
+            entry = {key: value for key, value in entry.items() if key != "original"}
+            return dict(entry, source=new)
+
+        monitors = {name: replaced(entry) for name, entry in layout.monitors.items()}
+        span = replaced(layout.span) if layout.span else None
+        return self._write(layout.path, layout.name, monitors, span=span)
 
     def duplicate(self, layout):
         """A copy named "<name> (copy)", with its own preview, listed last."""
