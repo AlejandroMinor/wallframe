@@ -20,7 +20,7 @@ from wallframe.monitor import Monitor  # noqa: E402
 from wallframe.state import Store  # noqa: E402
 from wallframe.window import (EXPORT_MENU, LABEL_SIZE, NUDGE, NUDGE_SHIFT, Window,  # noqa: E402
                               build_menu, centimeter_labels, stamp)
-from gi.repository import Gdk, Gtk  # noqa: E402
+from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
 NO_DAEMON = "wallframe-no-existe-este-programa"
 
@@ -82,6 +82,7 @@ class StandIn:
         self.grid_button = Widget()
         self.layouts_button = Widget()
         self.settings_button = Widget()
+        self.gallery_button = Widget()
         self.arrange_button = Widget()
         self.dragged = self.held = self.selected = None
         self.syncing = False
@@ -791,3 +792,39 @@ def test_random_layout_switches_to_another(tmp_path):
     Window.random_layout(window)
     assert monitor.framing.flip_h and window.daemon.shown.keys() == {"DP-1"}
     assert window.flashed[-1] == ("success", "Switched to Mirrored")
+
+
+def test_the_wallpaper_panel_frames_a_picture_on_what_is_edited(tmp_path):
+    folder = tmp_path / "walls"
+    folder.mkdir()
+    first = wallpaper(folder, "first.png")
+    second = wallpaper(folder, "second.png", size=(300, 300))
+    config.save({"wallpaper_folder": str(folder)})
+    monitor = monitor_on(tmp_path, "DP-1", 90, 160, first)
+    window = StandIn([monitor], RecordingDaemon())
+    Window.build_gallery_panel(window)
+    Window.fill_gallery(window)
+    shown = [child.path for child in window.gallery_grid]
+    assert sorted(shown) == sorted([first, second])
+    assert not window.gallery_empty.get_visible()
+    marked = [child.path for child in window.gallery_grid if child.has_css_class("active-layout")]
+    assert marked == [first]                       # what the monitor has
+    while GLib.MainContext.default().iteration(False):
+        pass  # the thumbnails reach the grid from idle callbacks
+    assert not window.gallery_progress.get_visible()  # every thumbnail made
+    assert window.gallery_count.get_label() == "Making thumbnails… 2 of 2"
+
+    Window.pick_wallpaper(window, second)
+    assert monitor.image == second and monitor.touched and not window.daemon.shown
+    monitor.edit("mirror")
+    Window.pick_wallpaper(window, second)          # the second click of a double click
+    assert monitor.framing.flip_h                  # the framing stays
+
+
+def test_the_wallpaper_panel_says_when_the_folder_is_gone(tmp_path):
+    config.save({"wallpaper_folder": str(tmp_path / "missing")})
+    window = StandIn([monitor_on(tmp_path, "DP-1", 90, 160, wallpaper(tmp_path))])
+    Window.build_gallery_panel(window)
+    Window.fill_gallery(window)
+    assert window.gallery_empty.get_visible()
+    assert "does not exist" in window.gallery_empty.get_label()

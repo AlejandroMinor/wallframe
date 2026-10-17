@@ -107,7 +107,8 @@ for_window [app_id="io.github.AlejandroMinor.wallframe"] floating enable
 | Move the background instead of the image | Fill panel | `B` |
 | Mirror / flip / rotate 90° | Toolbar | `H` / `V` / `R` |
 | Reset to the original image, centered | Toolbar | `0` |
-| Open another image for this monitor | Toolbar, or drop a file on the canvas | `O` |
+| Pick a wallpaper from your folder | Wallpapers button | `W` |
+| Open an image from anywhere | Wallpapers panel, **Open file…**, or drop a file on the canvas | `O` |
 | Discard changes since the last Apply | Toolbar | `D` |
 | Copy from another monitor: everything, or just the fill | Toolbar | |
 | Rule-of-thirds grid; in the span, also of the whole picture, and the desk's centimeters while arranging | Toolbar | `G` |
@@ -128,6 +129,8 @@ Zoom below 100% to see more of the image, or to make it smaller than the monitor
 ![The Export menu: the picture as it looks, or the picture and mask for an external AI, and its prompt](docs/export.webp)
 
 ![A landscape picture zoomed out on a portrait monitor, with the empty space filled by a blurred copy](docs/fill.webp)
+
+The **Wallpapers** panel (the pictures folder in the top bar, or `W`) shows the pictures in your wallpaper folder, newest first. Click one to put it on what you are editing: one monitor, or the span. It is centered and waits for Apply, so you can frame it first. Double-click one to apply it at once. The panel opens beside the canvas, so you can try one picture after another and see each one framed. Drag the divider to make it wider or narrower, and `Esc` closes it. The folder button at the top changes the folder; it starts in your Pictures folder. **Open file…** next to it opens a picture from anywhere else. Thumbnails are kept in `~/.cache/wallframe/thumbnails`, so the panel opens fast the next time. Animated GIFs and videos are not listed.
 
 A dot on a monitor button means that the monitor does not show your changes yet. Apply crops the image to the exact size of the monitor and sets it with awww (or swww) on that monitor only. The window stays open.
 
@@ -192,6 +195,7 @@ transition_duration = 1.5
 transition_fps = 60
 transition_step = 63
 transition_angle = 30
+wallpaper_folder = ~/Pictures/Wallpapers
 post_command = wallust run "$wallpaper"
 ```
 

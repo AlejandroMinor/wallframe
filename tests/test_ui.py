@@ -135,6 +135,15 @@ def test_every_panel_opens_and_closes(tmp_path):
         stack.set_visible_child_name("desk")
         assert stack.get_visible_child_name() == "desk"
 
+    def wallpapers(shown):
+        def step(window):
+            if shown:
+                window.gallery_button.set_active(True)
+            else:
+                press(window, "Escape")
+            assert window.gallery_panel.get_visible() == shown
+        return step
+
     def grid(window):
         before = window.grid_button.get_active()
         press(window, "g")
@@ -147,5 +156,6 @@ def test_every_panel_opens_and_closes(tmp_path):
              ("fill", open_menu("fill_button")), ("closed", close_menu("fill_button")),
              ("help", open_menu("help_button")), ("closed", close_menu("help_button")),
              ("settings", open_menu("settings_button")), ("closed", close_menu("settings_button")),
+             ("wallpapers", wallpapers(True)), ("closed", wallpapers(False)),
              ("grid", grid)]
     walk(tmp_path, steps)

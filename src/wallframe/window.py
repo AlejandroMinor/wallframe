@@ -10,7 +10,7 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("Pango", "1.0")
 from gi.repository import Gdk, Gio, GLib, GObject, Gtk, Pango  # noqa: E402
 
-from . import calibration, config, render, upscalers  # noqa: E402
+from . import calibration, config, gallery, render, upscalers  # noqa: E402
 from .commands import Cancel, Cancelled  # noqa: E402
 from .framing import BLUR_RANGE, FILLS, MAX_ZOOM  # noqa: E402
 from . import aifill  # noqa: E402
@@ -24,6 +24,11 @@ ICONS_DIR = os.path.join(os.path.dirname(__file__), "icons")
 MARGIN = 60  # canvas space around the frame, to see what is left out
 ZOOM_STEP = 1.1
 FLASH_MS = 3000  # how long status bar messages stay
+GALLERY_THUMB = gallery.THUMB_SIZE  # each picture in the wallpaper panel, as made
+# The panel's first width, two in a row: each with the flow box's padding around it,
+# the spacing, the scrollbar and the margins. Dragging the divider changes it.
+GALLERY_WIDTH = 2 * (GALLERY_THUMB[0] + 12) + 6 + 24 + 16
+GALLERY_CANVAS_MIN = 300  # what the canvas keeps at least when the panel opens
 # The transition's numbers in Settings: (key, label, low, high, step, tooltip).
 TRANSITION_NUMBERS = [
     ("duration", "Duration (s)", 0, 10, 0.1, "Seconds; simple and none ignore it"),
@@ -61,6 +66,7 @@ SHORTCUTS = [
         (("R",), "Rotate 90°"),
         (("0",), "Reset to the original image, centered"),
         (("O",), "Open another image, or drop one on the canvas"),
+        (("W",), "Wallpapers: pick one from your folder, or open a file"),
         (("D",), "Discard changes since the last Apply"),
     ]),
     ("Background (zoomed out, Blur fill)", [
@@ -100,6 +106,8 @@ label.success { color: @success_color; }
 label.warning { color: @warning_color; }
 label.error { color: @error_color; }
 button.active-layout { box-shadow: inset 0 0 0 2px @accent_color; }
+box.gallery-progress { padding: 10px 16px; border-radius: 10px;
+                       background-color: alpha(black, 0.75); color: white; }
 label.keycap {
   font-family: monospace;
   font-size: 0.9em;
@@ -294,7 +302,13 @@ class Window(Gtk.ApplicationWindow):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.top_bar = self.build_top_bar()
         box.append(self.top_bar)
-        box.append(self.area)
+        # The wallpapers beside the canvas, not over it: each picked picture shows there.
+        # The divider can be dragged; the grid takes as many columns as fit.
+        self.gallery_panel = self.build_gallery_panel()
+        self.split = Gtk.Paned(start_child=self.area, end_child=self.gallery_panel,
+                               resize_end_child=False, shrink_start_child=False,
+                               shrink_end_child=False, vexpand=True)
+        box.append(self.split)
         box.append(self.build_bottom_bar())
         self.set_child(box)
         self.connect_input()
@@ -332,9 +346,11 @@ class Window(Gtk.ApplicationWindow):
                                  propagate_natural_height=True, child=picker)
 
         tools = Gtk.Box(spacing=6)
-        tools.append(icon_button("document-open-symbolic",
-                                 "Open another image (O), or drop one",
-                                 self.choose_image))
+        self.gallery_button = icon_button("folder-pictures-symbolic",
+                                          "Wallpapers: pick one from your folder, "
+                                          "or open a file (W)",
+                                          self.on_gallery_button, toggle=True)
+        tools.append(self.gallery_button)
         for icon, tip, action in (
                 ("object-flip-horizontal-symbolic", "Mirror (H)", "mirror"),
                 ("object-flip-vertical-symbolic", "Flip upside down (V)", "flip"),
@@ -678,6 +694,185 @@ class Window(Gtk.ApplicationWindow):
         except OSError as error:
             self.flash(f"Could not delete it: {error.strerror or error}", "error")
         self.fill_arrangements()
+
+    def build_gallery_panel(self):
+        """The wallpaper folder as a grid, beside the canvas: a click puts the picture
+        on what is being edited, a monitor or the span, ready to frame; a double click
+        applies it too. Hidden until the Wallpapers button or W shows it."""
+        title = Gtk.Label(xalign=0, hexpand=True)
+        title.set_markup("<b>Wallpapers</b>")
+        close = icon_button("window-close-symbolic", "Close (Esc)",
+                            lambda: self.gallery_button.set_active(False))
+        close.add_css_class("flat")
+        header = Gtk.Box(spacing=6)
+        header.append(title)
+        header.append(close)
+        self.gallery_folder = Gtk.Button(focusable=False, hexpand=True,
+                                         tooltip_text="Choose the wallpaper folder")
+        self.gallery_folder.connect("clicked", lambda _b: self.choose_gallery_folder())
+        reload = icon_button("view-refresh-symbolic", "Look for new pictures",
+                             lambda: self.fill_gallery(force=True))
+        # For a picture outside the folder; dropping one on the canvas works too.
+        open_file = Gtk.Button(label="Open file…", focusable=False,
+                               tooltip_text="Open an image from anywhere (O), or drop one "
+                                            "on the canvas")
+        open_file.connect("clicked", lambda _b: self.choose_image())
+        row = Gtk.Box(spacing=6)
+        row.append(self.gallery_folder)
+        row.append(reload)
+        row.append(open_file)
+        self.gallery_grid = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE,
+                                        min_children_per_line=1, max_children_per_line=8,
+                                        valign=Gtk.Align.START,
+                                        row_spacing=6, column_spacing=6, homogeneous=True,
+                                        activate_on_single_click=True)
+        self.gallery_grid.connect("child-activated",
+                                  lambda _g, child: self.pick_wallpaper(child.path))
+        double = Gtk.GestureClick()
+        double.connect("pressed", lambda _g, presses, _x, _y: presses == 2 and self.apply())
+        self.gallery_grid.add_controller(double)
+        self.gallery_empty = Gtk.Label(xalign=0, wrap=True, max_width_chars=50)
+        self.gallery_empty.add_css_class("dim-label")
+        scroll = Gtk.ScrolledWindow(child=self.gallery_grid, vexpand=True,
+                                    hscrollbar_policy=Gtk.PolicyType.NEVER)
+        hint = Gtk.Label(label="Click: frame it here · Double-click: apply it", xalign=0)
+        hint.add_css_class("dim-label")
+        # While thumbnails are made: how many are done, floating at the bottom of the grid.
+        self.gallery_spinner = Gtk.Spinner()
+        self.gallery_progress = Gtk.Box(spacing=8, halign=Gtk.Align.CENTER,
+                                        valign=Gtk.Align.END, margin_bottom=12, visible=False,
+                                        can_target=False)  # clicks reach the pictures below
+        self.gallery_progress.add_css_class("gallery-progress")
+        self.gallery_count = Gtk.Label()
+        self.gallery_progress.append(self.gallery_spinner)
+        self.gallery_progress.append(self.gallery_count)
+        grid_area = Gtk.Overlay(child=scroll)
+        grid_area.add_overlay(self.gallery_progress)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, visible=False,
+                      margin_top=8, margin_bottom=8, margin_start=8, margin_end=8)
+        for widget in (header, row, self.gallery_empty, grid_area, hint):
+            box.append(widget)
+        self.gallery_shown = None  # (folder, pictures) in the grid, to skip a reload
+        self.gallery_placed = False  # the divider is put once; then it stays where dragged
+        return box
+
+    def on_gallery_button(self):
+        """Shows or hides the wallpapers beside the canvas."""
+        shown = self.gallery_button.get_active()
+        self.gallery_panel.set_visible(shown)
+        if not shown:
+            return
+        if not self.gallery_placed:
+            self.gallery_placed = True
+            self.split.set_position(max(GALLERY_CANVAS_MIN,
+                                        self.split.get_width() - GALLERY_WIDTH))
+        self.fill_gallery()
+
+    def wallpaper_folder(self):
+        pictures = (GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_PICTURES)
+                    or os.path.expanduser("~/Pictures"))
+        return config.wallpaper_folder(pictures)
+
+    def fill_gallery(self, force=False):
+        """One thumbnail per picture in the folder, newest first. The grid is made at
+        once and the thumbnails come in as they are made, off the main thread."""
+        folder = self.wallpaper_folder()
+        self.gallery_folder.set_label(folder.replace(os.path.expanduser("~"), "~", 1))
+        found = gallery.pictures(folder)
+        if not force and self.gallery_shown == (folder, found):
+            self.mark_gallery()
+            return
+        self.gallery_shown = (folder, found)
+        self.gallery_grid.remove_all()
+        self.gallery_empty.set_visible(not found)
+        self.gallery_empty.set_label(f"No pictures in {os.path.basename(folder) or folder}. "
+                                     "Choose another folder above."
+                                     if os.path.isdir(folder) else
+                                     "This folder does not exist. Choose another one above.")
+        pictures, missing = {}, []
+        for path in found:
+            # Whole, not cropped: a wide or tall picture shows all of itself.
+            picture = Gtk.Picture(content_fit=Gtk.ContentFit.CONTAIN,
+                                  width_request=GALLERY_THUMB[0],
+                                  height_request=GALLERY_THUMB[1])
+            thumb = gallery.cached(path)
+            if thumb:
+                picture.set_filename(thumb)
+            else:
+                missing.append(path)
+            child = Gtk.FlowBoxChild(child=picture, focusable=False,
+                                     tooltip_text=os.path.basename(path))
+            child.path = path
+            self.gallery_grid.append(child)
+            pictures[path] = picture
+        self.mark_gallery()
+        self.show_gallery_progress(0, len(missing))
+        if not missing:
+            return
+        shown = self.gallery_shown
+
+        def made(path, thumb, done):
+            if self.gallery_shown is shown:
+                if thumb:
+                    pictures[path].set_filename(thumb)
+                self.show_gallery_progress(done, len(missing))
+
+        def work():
+            for done, path in enumerate(missing, 1):
+                if self.gallery_shown is not shown:
+                    return None  # another folder by now: stop making these
+                try:
+                    thumb = gallery.thumbnail(path)
+                except OSError:
+                    thumb = None  # unreadable: its place stays empty
+                GLib.idle_add(lambda path=path, thumb=thumb, done=done:
+                              made(path, thumb, done) and False)
+            return None
+
+        self.in_background(work, lambda _result: None)
+
+    def show_gallery_progress(self, done, total):
+        """Shows "Making thumbnails… 45 of 302" with a spinner, hidden once all are made."""
+        busy = done < total
+        self.gallery_spinner.set_spinning(busy)
+        self.gallery_progress.set_visible(busy)
+        self.gallery_count.set_label(f"Making thumbnails… {done} of {total}")
+
+    def mark_gallery(self):
+        """Marks the picture the monitor or span being edited has, if it is in the grid."""
+        shown = self.monitor.original
+        child = self.gallery_grid.get_first_child()
+        while child:
+            if getattr(child, "path", None) == shown:
+                child.add_css_class("active-layout")
+            else:
+                child.remove_css_class("active-layout")
+            child = child.get_next_sibling()
+
+    def pick_wallpaper(self, path):
+        """Puts `path` on what is being edited, unless it has it already: the second
+        click of a double click then keeps the framing, and Apply shows it."""
+        if self.monitor.original != path:
+            self.open_image(self.monitor, path)
+        self.mark_gallery()
+
+    def choose_gallery_folder(self):
+        dialog = Gtk.FileDialog(title="Choose the wallpaper folder", modal=False,
+                                initial_folder=Gio.File.new_for_path(self.wallpaper_folder()))
+
+        def chosen(dialog, result):
+            try:
+                folder = dialog.select_folder_finish(result).get_path()
+            except GLib.Error:  # cancelled
+                return
+            try:
+                config.save({"wallpaper_folder": folder})
+            except OSError as error:
+                self.flash(f"Could not save the folder: {error.strerror or error}", "error")
+                return
+            self.fill_gallery()
+
+        dialog.select_folder(self, None, chosen)
 
     def build_layouts_popover(self):
         """Save what the monitors show, and switch to a saved layout with one click."""
@@ -1834,6 +2029,8 @@ class Window(Gtk.ApplicationWindow):
         open_panel = next((b for b in panels if b.get_active()), None)
         if key == "Escape" and open_panel:
             open_panel.popdown()  # Esc closes the panel, not the whole window
+        elif key == "Escape" and self.gallery_button.get_active():
+            self.gallery_button.set_active(False)  # then the wallpapers beside the canvas
         elif key in HELP_KEYS:
             self.help_button.set_active(not self.help_button.get_active())
         elif key == "Escape":
@@ -1846,6 +2043,8 @@ class Window(Gtk.ApplicationWindow):
             self.edit(KEY_ACTIONS[key])
         elif key == DISCARD_KEY:
             self.discard()
+        elif key == "w":
+            self.gallery_button.set_active(not self.gallery_button.get_active())
         elif key == "o":
             self.choose_image()
         elif key == "g":

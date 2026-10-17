@@ -7,6 +7,7 @@ Read on each use, so a change takes effect without restarting wallframe.
     transition_type = wipe
     transition_duration = 1.5
     transition_fps = 60
+    wallpaper_folder = ~/Pictures/Wallpapers
 """
 
 import configparser
@@ -39,6 +40,11 @@ def get(key, path=None):
 def post_command(path=None):
     """The command to run after the wallpaper changes, or "" when none is set."""
     return get("post_command", path)
+
+
+def wallpaper_folder(default, path=None):
+    """The folder the wallpaper picker shows, or `default` when none is set."""
+    return os.path.expanduser(get("wallpaper_folder", path)) or default
 
 
 def transition(path=None):
