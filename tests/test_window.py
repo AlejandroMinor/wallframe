@@ -19,7 +19,7 @@ from wallframe.layouts import Layouts  # noqa: E402
 from wallframe.monitor import Monitor  # noqa: E402
 from wallframe.state import Store  # noqa: E402
 from wallframe.window import (EXPORT_MENU, LABEL_SIZE, NUDGE, NUDGE_SHIFT, Window,  # noqa: E402
-                              build_menu, centimeter_labels, stamp)
+                              accent_css, build_menu, centimeter_labels, stamp)
 from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
 NO_DAEMON = "wallframe-no-existe-este-programa"
@@ -884,3 +884,11 @@ def test_clearing_thumbnails_empties_the_cache(tmp_path):
     assert gallery.usage() == (0, 0) and window.gallery_shown is None
     assert window.cache_usage.get_label() == "None kept"
     assert window.flashed[-1] == ("success", "Thumbnails cleared")
+
+
+def test_the_accent_is_the_desktops_when_it_sets_one():
+    assert "mix(#3584e4, @theme_fg_color" in accent_css("#3584e4")
+
+
+def test_without_a_desktop_accent_the_theme_selection_color_stands_in():
+    assert "mix(@theme_selected_bg_color, @theme_fg_color" in accent_css(None)

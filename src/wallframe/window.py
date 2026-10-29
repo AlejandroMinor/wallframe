@@ -99,14 +99,19 @@ NUDGE = 5            # monitor pixels per arrow key press
 NUDGE_SHIFT = 50     # with Shift held
 ARRANGE_MM = 1       # millimeters per arrow key press while arranging, with real sizes
 ARRANGE_MM_SHIFT = 10
+# GNOME's accent names in the colors libadwaita gives them.
+GNOME_ACCENTS = {"blue": "#3584e4", "teal": "#2190a4", "green": "#3a944a",
+                 "yellow": "#c88800", "orange": "#ed5b00", "red": "#e62d42",
+                 "pink": "#d56199", "purple": "#9141ac", "slate": "#6f8396"}
 # GTK's own theme leaves these classes uncolored on labels; the named colors
-# still come from the user's theme.
+# still come from the user's theme. @wallframe_accent is defined in add_style:
+# @accent_color is libadwaita's, undefined here, and GTK draws it black.
 STYLE = """
-label.accent { color: @accent_color; }
+label.accent { color: @wallframe_accent; }
 label.success { color: @success_color; }
 label.warning { color: @warning_color; }
 label.error { color: @error_color; }
-button.active-layout { box-shadow: inset 0 0 0 2px @accent_color; }
+button.active-layout { box-shadow: inset 0 0 0 2px @success_color; }
 box.gallery-progress { padding: 10px 16px; border-radius: 10px;
                        background-color: alpha(black, 0.75); color: white; }
 label.keycap {
@@ -136,12 +141,45 @@ def add_style():
     """The status bar colors and wallframe's own icons, once per display."""
     display = Gdk.Display.get_default()
     provider = Gtk.CssProvider()
-    provider.load_from_string(STYLE)
+    provider.load_from_string(accent_css(system_accent()) + STYLE)
     Gtk.StyleContext.add_provider_for_display(
         display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
     Gtk.IconTheme.get_for_display(display).add_search_path(ICONS_DIR)
     # Found there too, so the windows have it even without the desktop file linked.
     Gtk.Window.set_default_icon_name(APP_ID)
+
+
+def accent_css(accent):
+    """Defines @wallframe_accent: the desktop's accent, or the theme's selection color,
+    lifted toward the text color so it reads on the bar in light and dark themes."""
+    if accent:
+        return f"@define-color wallframe_accent mix({accent}, @theme_fg_color, 0.35);\n"
+    return "@define-color wallframe_accent mix(@theme_selected_bg_color, @theme_fg_color, 0.5);\n"
+
+
+def system_accent():
+    """The desktop's accent as a CSS color, or None when it sets none.
+
+    Asked of the desktop portal first; GNOME's setting holds only a name.
+    """
+    try:
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION)
+        reply = bus.call_sync(
+            "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop",
+            "org.freedesktop.portal.Settings", "ReadOne",
+            GLib.Variant("(ss)", ("org.freedesktop.appearance", "accent-color")),
+            None, Gio.DBusCallFlags.NONE, 500)
+        rgb = reply.unpack()[0]
+        if all(0 <= channel <= 1 for channel in rgb):  # out of range: none set
+            return "rgb({}, {}, {})".format(*(round(channel * 255) for channel in rgb))
+    except GLib.Error:
+        pass  # no portal, or one that does not know the accent
+    source = Gio.SettingsSchemaSource.get_default()
+    schema = source and source.lookup("org.gnome.desktop.interface", True)
+    if schema and schema.has_key("accent-color"):
+        return GNOME_ACCENTS.get(Gio.Settings.new("org.gnome.desktop.interface")
+                                 .get_string("accent-color"))
+    return None
 
 
 def to_surface(img):
@@ -1084,9 +1122,9 @@ class Window(Gtk.ApplicationWindow):
             content.append(picture)
             content.append(name)
             active = self.shows_layout(layout)
-            if active:  # what the monitors show: the card says so, in the accent color
+            if active:  # what the monitors show: the card says so, in the success color
                 name.set_label(f"✓ {layout.name}")
-                name.add_css_class("accent")
+                name.add_css_class("success")
             card = Gtk.Button(child=content, focusable=False,
                               tooltip_text="On the monitors now · click to apply it again"
                               if active else "Apply to the monitors now")
