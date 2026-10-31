@@ -20,7 +20,7 @@ from .framing import BLUR_RANGE, FILLS, MAX_ZOOM  # noqa: E402
 from . import aifill  # noqa: E402
 from .arrangements import Arrangements  # noqa: E402
 from .layouts import Layouts, pick  # noqa: E402
-from .monitor import Snapshot, has_preview, read_image  # noqa: E402
+from .monitor import Snapshot, has_preview, preview, read_image  # noqa: E402
 
 APP_ID = "io.github.AlejandroMinor.wallframe"
 # wallframe's own icons, for what the icon theme has no symbol for.
@@ -38,6 +38,9 @@ GALLERY_CANVAS_MIN = 300  # what the canvas keeps at least when the panel opens
 # once: monitors cropped by Apply (each holds its picture whole, hence few), thumbnails.
 APPLY_THREADS = 4
 GALLERY_THREADS = min(8, os.cpu_count() or 1)
+# The pointer resting this long on a picture of the panel reads it ahead, so the click
+# that follows puts it on the canvas at once; passing over pictures reads none.
+HOVER_MS = 150
 # The transition's numbers in Settings: (key, label, low, high, step, tooltip).
 TRANSITION_NUMBERS = [
     ("duration", "Duration (s)", 0, 10, 0.1, "Seconds; simple and none ignore it"),
@@ -389,7 +392,7 @@ class Window(Gtk.ApplicationWindow):
         self.upscaling = {}       # monitor name -> the Cancel of its running upscale
         self.ai_step, self.ai_pictures = 0, 0  # picture being upscaled, of how many
         self.previews = {}    # monitor name -> (image, mirror and rotation, Scaled)
-        self.backgrounds = {}  # monitor name -> (image, transform and fill, cairo surface)
+        self.backgrounds = {}  # monitor name -> (image, transform and fill, width, cairo surface)
         self.show_grid = True
         self.syncing = False  # set while code moves the zoom slider
         self.asking = False   # set while wallpaper-change questions are on screen
@@ -434,6 +437,9 @@ class Window(Gtk.ApplicationWindow):
         # Thumbnails still waiting are skipped: wallframe exits once those being made are.
         self.connect("close-request", lambda _w: setattr(self, "gallery_shown", None) or False)
         self.select(start)
+        # Previews not used in a month go, like the thumbnails (see fill_gallery).
+        self.in_background(lambda: gallery.prune(cache=gallery.previews_dir()),
+                           lambda _gone: None)
 
     def build_top_bar(self):
         """Monitor buttons on the left, tools and Apply on the right."""
@@ -638,7 +644,7 @@ class Window(Gtk.ApplicationWindow):
         save = Gtk.Button(label="Save", halign=Gtk.Align.END)
         save.add_css_class("suggested-action")
         save.connect("clicked", lambda _b: self.save_settings())
-        cache_title = Gtk.Label(label="Thumbnails of the wallpaper panel", xalign=0,
+        cache_title = Gtk.Label(label="Thumbnails, and previews of big pictures", xalign=0,
                                 margin_top=8)
         self.cache_usage = Gtk.Label(xalign=0, hexpand=True)
         self.cache_usage.add_css_class("dim-label")
@@ -679,13 +685,15 @@ class Window(Gtk.ApplicationWindow):
         self.show_cache_usage()
 
     def show_cache_usage(self):
-        count, size = gallery.usage()
+        caches = [gallery.usage(), gallery.usage(gallery.previews_dir())]
+        count, size = (sum(kept) for kept in zip(*caches))
         self.cache_usage.set_label(f"{count} kept · {size / 1e6:.1f} MB" if count
                                    else "None kept")
 
     def clear_thumbnails(self):
         """Empties the thumbnail cache; the panel, if shown, makes them again."""
         gallery.clear()
+        gallery.clear(gallery.previews_dir())
         self.gallery_shown = None  # the grid shows deleted files: rebuilt when next shown
         self.show_cache_usage()
         if self.side_panel.get_visible() and \
@@ -974,6 +982,12 @@ class Window(Gtk.ApplicationWindow):
         double = Gtk.GestureClick()
         double.connect("pressed", lambda _g, presses, _x, _y: presses == 2 and self.apply())
         self.gallery_grid.add_controller(double)
+        hover = Gtk.EventControllerMotion()
+        hover.connect("motion", lambda _c, x, y: self.hover_gallery(
+            self.gallery_grid.get_child_at_pos(x, y)))
+        hover.connect("leave", lambda _c: self.hover_gallery(None))
+        self.gallery_grid.add_controller(hover)
+        self.gallery_hovered, self.gallery_hover_timer = None, None
         self.gallery_empty = Gtk.Label(xalign=0, wrap=True, max_width_chars=50)
         self.gallery_empty.add_css_class("dim-label")
         scroll = Gtk.ScrolledWindow(child=self.gallery_grid, vexpand=True,
@@ -1133,6 +1147,32 @@ class Window(Gtk.ApplicationWindow):
             else:
                 child.remove_css_class("active-layout")
             child = child.get_next_sibling()
+
+    def hover_gallery(self, child):
+        """The pointer is on `child` of the panel, or on none: once it rests there, the
+        picture is read in the background, ready for a click."""
+        path = getattr(child, "path", None)
+        if path == self.gallery_hovered:
+            return
+        self.gallery_hovered = path
+        if self.gallery_hover_timer:
+            GLib.source_remove(self.gallery_hover_timer)
+            self.gallery_hover_timer = None
+        if path and not has_preview(path):
+            self.gallery_hover_timer = GLib.timeout_add(HOVER_MS, self.read_ahead, path)
+
+    def read_ahead(self, path):
+        """Reads the preview of `path` off the main thread; open_image() then finds it."""
+        self.gallery_hover_timer = None
+
+        def work():
+            try:
+                preview(path)
+            except Exception:  # noqa: BLE001 - only reading ahead: a click says what failed
+                pass
+
+        threading.Thread(target=work, daemon=True).start()
+        return False  # run once
 
     def pick_wallpaper(self, path):
         """Puts `path` on what is being edited, unless it has it already: the second
@@ -1662,14 +1702,16 @@ class Window(Gtk.ApplicationWindow):
                framing.fill, framing.fill_color, framing.blur, framing.backdrop.key())
         need = max(1, min(monitor.width // 2, math.ceil(width)))
         cached = self.backgrounds.get(monitor.name)
-        if cached and cached[0] == key and need <= cached[1].get_width() <= need / 0.75:
-            return cached[1]  # within cairo's quick filter, see Scaled
+        if cached and cached[0] == key and need <= cached[1] <= need / 0.75:
+            return cached[2]  # within cairo's quick filter, see Scaled
         # Some room both ways, so resizing the window does not remake it on every frame.
         made = max(1, min(monitor.width // 2, math.ceil(need * 1.15)))
         size = (made, max(1, round(made * monitor.height / monitor.width)))
         rgb = self.preview(monitor).rgb()
-        surface = to_surface(render.background(rgb, framing, size))
-        self.backgrounds[monitor.name] = (key, surface)
+        # A strong blur stays as small as it was blurred: the screen scales it up,
+        # smooth as it is, three times quicker than scaling it here.
+        surface = to_surface(render.background(rgb, framing, size, scaled=False))
+        self.backgrounds[monitor.name] = (key, made, surface)
         return surface
 
     def pixel_scale(self):
@@ -1717,9 +1759,11 @@ class Window(Gtk.ApplicationWindow):
                 cr.rectangle(x, y, w, h)
             cr.clip()
             cr.translate(fx, fy)
-            fill_scale = scale * monitor.width / background.get_width()
-            cr.scale(fill_scale, fill_scale)
+            cr.scale(scale * monitor.width / background.get_width(),
+                     scale * monitor.height / background.get_height())
             cr.set_source_surface(background, 0, 0)
+            # Scaled up, its edge pixels go on to the frame's edge, not fading out.
+            cr.get_source().set_extend(cairo.EXTEND_PAD)
             cr.paint()
             cr.restore()
 

@@ -3,7 +3,9 @@ import threading
 from collections import OrderedDict, namedtuple
 from concurrent.futures import Future
 
-from . import render
+from PIL import Image
+
+from . import gallery, render
 from .framing import Framing
 
 PREVIEW_MAX = 2048  # longest side of the preview copy; the crop uses the original
@@ -40,13 +42,41 @@ def preview(path):
             _previews.move_to_end(key)
     if mine:
         try:
-            made.set_result(render.thumbnail(path, PREVIEW_MAX))
+            made.set_result(_read_preview(path))
         except BaseException as error:
             made.set_exception(error)
             with _previews_lock:
                 if _previews.get(key) is made:
                     del _previews[key]  # not kept: the next one tries again
     return made.result()
+
+
+def _read_preview(path):
+    """The preview, from the copy kept on disk when there is one. A picture larger than
+    the preview gets one, written off the caller's thread, for the next time."""
+    kept = gallery.cached(path, gallery.previews_dir())
+    if kept:
+        try:
+            with Image.open(kept) as img:
+                img.load()
+                return img.convert("RGBA")
+        except (OSError, ValueError):
+            pass  # broken: made again, and written over
+    image = render.thumbnail(path, PREVIEW_MAX)
+    if max(render.image_size(path)) > PREVIEW_MAX:  # a smaller one is read as quickly
+        destination = gallery.cache_file(path, gallery.previews_dir())
+        threading.Thread(target=_keep, args=(image, destination), daemon=True).start()
+    return image
+
+
+def _keep(image, destination):
+    """Writes a preview to disk; in RGB when it has no transparency: smaller and quicker."""
+    if image.getextrema()[3] == (255, 255):
+        image = image.convert("RGB")
+    try:
+        gallery.store(image, destination)
+    except OSError:
+        pass  # only a convenience: the picture is read again next time
 
 
 def has_preview(path):

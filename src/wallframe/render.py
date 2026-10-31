@@ -80,12 +80,14 @@ def transform(img, framing):
     return img.transpose(_ROTATIONS[framing.rotation]) if framing.rotation else img
 
 
-def background(image, framing, size):
+def background(image, framing, size, scaled=True):
     """What fills the gaps around a smaller image: a plain color, or the image
     itself as the backdrop framing shows it, blurred.
 
     `image` is already mirrored and rotated, at any resolution (the preview
-    passes its thumbnail), and `size` is the output size.
+    passes its thumbnail), and `size` is the output size. With scaled=False, a
+    strong blur comes back smaller, as it is blurred, for the caller to scale up:
+    the canvas lets the screen do it.
     """
     if framing.fill == "color":
         return Image.new("RGB", size, framing.fill_color)
@@ -103,7 +105,7 @@ def background(image, framing, size):
     radius = framing.blur * small[0] / framing.monitor_w  # monitor pixels -> small copy pixels
     if radius:
         backdrop = backdrop.filter(ImageFilter.GaussianBlur(radius))
-    return backdrop if small == size else backdrop.resize(size, Image.BICUBIC)
+    return backdrop if small == size or not scaled else backdrop.resize(size, Image.BICUBIC)
 
 
 def compose(source, framing):

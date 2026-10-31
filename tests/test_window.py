@@ -6,6 +6,7 @@ display; it is skipped when GTK is missing, like the rest of the editor.
 """
 
 import os
+import time
 
 import pytest
 
@@ -16,7 +17,7 @@ from wallframe import config, gallery, span, upscalers  # noqa: E402
 from wallframe.commands import Cancel  # noqa: E402
 from wallframe.daemons import Daemon, Output  # noqa: E402
 from wallframe.layouts import Layouts  # noqa: E402
-from wallframe.monitor import Monitor  # noqa: E402
+from wallframe.monitor import Monitor, has_preview  # noqa: E402
 from wallframe.state import Store  # noqa: E402
 from wallframe.window import (EXPORT_MENU, LABEL_SIZE, NUDGE, NUDGE_SHIFT, Scaled,  # noqa: E402
                               Window, accent_css, build_menu, centimeter_labels, stamp)
@@ -924,3 +925,24 @@ def test_a_second_click_on_a_picture_being_read_does_not_read_it_again(tmp_path)
     window.open_image = lambda *_args: pytest.fail("read twice")
     window.mark_gallery = lambda: None
     Window.pick_wallpaper(window, beach)
+
+
+def test_resting_on_a_picture_reads_it_ahead(tmp_path):
+    monitor = monitor_on(tmp_path, "DP-1", 90, 160, wallpaper(tmp_path))
+    window = StandIn([monitor])
+    window.gallery_hovered = window.gallery_hover_timer = None
+    beach = wallpaper(tmp_path, "beach.png")
+
+    class Child:
+        path = beach
+
+    Window.hover_gallery(window, Child())
+    assert window.gallery_hover_timer                    # waits for the pointer to rest
+    while window.gallery_hover_timer:
+        GLib.MainContext.default().iteration(True)       # until it rests long enough
+    deadline = time.monotonic() + 5
+    while not has_preview(beach) and time.monotonic() < deadline:
+        time.sleep(0.02)                                 # read on another thread
+    assert has_preview(beach)                            # a click now opens it at once
+    Window.hover_gallery(window, None)                  # the pointer left the panel
+    assert window.gallery_hovered is None

@@ -1,12 +1,14 @@
 """Tests for one monitor's edit and apply cycle, with a fake daemon."""
 
 import os
+import time
 
 import pytest
 from PIL import Image
 
 from wallframe.daemons import Output
-from wallframe.monitor import Monitor, has_preview, preview
+from wallframe import gallery, render
+from wallframe.monitor import PREVIEW_MAX, Monitor, _previews, has_preview, preview
 from wallframe.state import Store
 
 
@@ -333,3 +335,31 @@ def test_a_picture_that_cannot_be_read_is_not_kept(tmp_path):
         with pytest.raises(OSError):
             preview(str(notes))
     assert not has_preview(str(notes))
+
+
+def kept_on_disk(path, wait=5):
+    """The preview of `path` written to disk, once the thread writing it is done."""
+    found = gallery.cached(str(path), gallery.previews_dir())
+    deadline = time.monotonic() + wait
+    while not found and time.monotonic() < deadline:
+        time.sleep(0.02)
+        found = gallery.cached(str(path), gallery.previews_dir())
+    return found
+
+
+def test_a_big_picture_keeps_its_preview_on_disk(tmp_path, monkeypatch):
+    big = tmp_path / "big.png"
+    Image.new("RGB", (PREVIEW_MAX * 2, 100), (200, 20, 30)).save(big)
+    first = preview(str(big))
+    assert kept_on_disk(big)
+    _previews.clear()                                    # as if wallframe opened again
+    monkeypatch.setattr(render, "thumbnail", lambda *_args: pytest.fail("read the picture"))
+    again = preview(str(big))
+    assert again.mode == "RGBA" and again.tobytes() == first.tobytes()  # the same, lossless
+
+
+def test_a_small_picture_is_not_kept_on_disk(tmp_path):
+    small = tmp_path / "small.png"
+    Image.new("RGB", (400, 200)).save(small)
+    preview(str(small))
+    assert not kept_on_disk(small, wait=0.3)             # read as quickly as the copy
