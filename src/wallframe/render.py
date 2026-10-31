@@ -1,3 +1,5 @@
+import threading
+
 from PIL import Image, ImageFilter
 
 # Pillow rotates counter-clockwise; Framing.rotation is clockwise.
@@ -5,6 +7,10 @@ _ROTATIONS = {90: Image.ROTATE_270, 180: Image.ROTATE_180, 270: Image.ROTATE_90}
 # A strong blur runs on a copy up to this many times smaller, then is scaled
 # back up: much faster, and a blurred image loses nothing by it.
 _BLUR_SHRINK = 8
+_REDUCING_GAP = 3.0  # Pillow: from 3 on, "indistinguishable from fair resampling"
+# zlib's quickest level: a monitor's crop saves several times faster than at Pillow's
+# default (6), for a file about a fifth larger. PNG stays lossless at any level.
+CROP_COMPRESSION = 1
 
 
 def _inside(box, image):
@@ -36,6 +42,35 @@ def thumbnail(path, max_side):
         return img.convert("RGBA")
 
 
+def _rgb(image):
+    """`image` in RGB; convert() copies even an image that is RGB already."""
+    return image if image.mode == "RGB" else image.convert("RGB")
+
+
+class Loaded:
+    """A picture read whole once, for several crops of it: the pieces of a span, or
+    monitors that show the same picture. Safe to share between threads; each mirror
+    and rotation is made once too."""
+
+    def __init__(self, path):
+        self.path = path
+        self._image = None
+        self._turned = {}
+        self._lock = threading.Lock()
+
+    def turned(self, framing):
+        """The picture, in RGB, mirrored and rotated as `framing` says."""
+        key = (framing.flip_h, framing.flip_v, framing.rotation)
+        with self._lock:
+            if key not in self._turned:
+                if self._image is None:
+                    with Image.open(self.path) as img:
+                        img.load()  # an RGB picture is kept as it is: read it before closing
+                        self._image = _rgb(img)
+                self._turned[key] = transform(self._image, framing)
+            return self._turned[key]
+
+
 def transform(img, framing):
     """Applies mirror and rotation; preview and crop share it so they always match."""
     if framing.flip_h:
@@ -54,13 +89,17 @@ def background(image, framing, size):
     """
     if framing.fill == "color":
         return Image.new("RGB", size, framing.fill_color)
+    image = _rgb(image)
     # A light blur needs detail, so it shrinks less; no blur keeps full size.
     shrink = max(1, min(_BLUR_SHRINK, framing.blur // 8))
     small = (max(1, size[0] // shrink), max(1, size[1] // shrink))
     scale = image.width / framing.image_w  # framing pixels -> pixels of this image
     # A thumbnail's height is rounded, so the scaled box can reach past its edge.
     box = _inside([side * scale for side in framing.backdrop.crop_box()], image)
-    backdrop = image.convert("RGB").resize(small, Image.LANCZOS, box=box)
+    # Shrunk to blur, it may be shrunk in two steps, the first a quick integer one: five
+    # times faster, and after the blur no pixel differs by more than 1 of 255.
+    backdrop = image.resize(small, Image.LANCZOS, box=box,
+                            reducing_gap=_REDUCING_GAP if shrink > 1 else None)
     radius = framing.blur * small[0] / framing.monitor_w  # monitor pixels -> small copy pixels
     if radius:
         backdrop = backdrop.filter(ImageFilter.GaussianBlur(radius))
@@ -68,11 +107,13 @@ def background(image, framing, size):
 
 
 def compose(source, framing):
-    """What the monitor will show, at its exact size and gaps filled, in memory."""
+    """What the monitor will show, at its exact size and gaps filled, in memory.
+
+    `source` is the picture's path, or a Loaded one, read once for several crops.
+    """
     inner = framing.narrowed()  # a turned or tilted monitor in a span shows less, stretched across
-    with Image.open(source) as img:
-        picture = shown(transform(img.convert("RGB"), inner), inner,
-                        (inner.monitor_w, inner.monitor_h))
+    loaded = source if isinstance(source, Loaded) else Loaded(source)
+    picture = shown(loaded.turned(inner), inner, (inner.monitor_w, inner.monitor_h))
     if inner is not framing:
         picture = picture.resize((framing.monitor_w, framing.monitor_h), Image.LANCZOS)
     return picture
@@ -84,7 +125,7 @@ def shown(image, framing, size):
     `image` is already mirrored and rotated, at any resolution: the original
     for the crop, the preview thumbnail for a layout's small picture of it.
     """
-    image = image.convert("RGB")
+    image = _rgb(image)
     scale = image.width / framing.image_w  # framing pixels -> pixels of this image
     if framing.covers:
         box = _inside([side * scale for side in framing.crop_box()], image)
@@ -112,20 +153,22 @@ def export_for_fill(source, framing, color):
         raise ValueError("nothing to fill")
     size = (framing.monitor_w, framing.monitor_h)
     picture, mask = Image.new("RGB", size, color), Image.new("L", size, 255)
-    with Image.open(source) as img:
-        image = transform(img.convert("RGB"), framing)
-        scale = image.width / framing.image_w
-        source_box, target = framing.placement()
-        left, top, right, bottom = target
-        if right > left and bottom > top:
-            piece = image.resize((right - left, bottom - top), Image.LANCZOS,
-                                 box=_inside([side * scale for side in source_box], image))
-            picture.paste(piece, (left, top))
-            mask.paste(0, (left, top, right, bottom))
+    image = Loaded(source).turned(framing)
+    scale = image.width / framing.image_w
+    source_box, target = framing.placement()
+    left, top, right, bottom = target
+    if right > left and bottom > top:
+        piece = image.resize((right - left, bottom - top), Image.LANCZOS,
+                             box=_inside([side * scale for side in source_box], image))
+        picture.paste(piece, (left, top))
+        mask.paste(0, (left, top, right, bottom))
     return picture, mask
 
 
 def crop(source, framing, destination):
-    """Saves what the monitor will show, at its exact size, gaps filled."""
-    compose(source, framing).save(destination)
+    """Saves what the monitor will show, at its exact size, gaps filled, as a PNG.
+
+    `source` is a path or a Loaded picture, as for compose().
+    """
+    compose(source, framing).save(destination, "PNG", compress_level=CROP_COMPRESSION)
 

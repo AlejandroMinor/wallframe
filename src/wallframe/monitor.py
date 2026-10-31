@@ -1,12 +1,78 @@
 import os
-from collections import namedtuple
+import threading
+from collections import OrderedDict, namedtuple
+from concurrent.futures import Future
 
 from . import render
 from .framing import Framing
 
 PREVIEW_MAX = 2048  # longest side of the preview copy; the crop uses the original
+# Previews kept in memory besides the ones in use: reading a big picture for one takes
+# up to a second, and the same one comes back often (every monitor and the span on one
+# picture, Discard, the original and its upscaled copy, layouts).
+PREVIEWS_KEPT = 6
+_previews = OrderedDict()  # (path, inode, date, size) -> Future of its preview
+_previews_lock = threading.Lock()
 # A layout's entry for a monitor, read from disk and ready to edit.
 Snapshot = namedtuple("Snapshot", "source original framing thumb")
+
+
+def _preview_key(path):
+    status = os.stat(path)
+    return (os.path.abspath(path), status.st_ino, status.st_mtime_ns, status.st_size)
+
+
+def preview(path):
+    """The picture's preview copy (see PREVIEW_MAX), read once while it is kept.
+
+    Threads asking for the same picture at once wait for one read. Never change the
+    copy in place: monitors share it. Raises OSError when it cannot be read.
+    """
+    key = _preview_key(path)
+    with _previews_lock:
+        made = _previews.get(key)
+        mine = made is None
+        if mine:
+            made = _previews[key] = Future()
+            while len(_previews) > PREVIEWS_KEPT:
+                _previews.popitem(last=False)
+        else:
+            _previews.move_to_end(key)
+    if mine:
+        try:
+            made.set_result(render.thumbnail(path, PREVIEW_MAX))
+        except BaseException as error:
+            made.set_exception(error)
+            with _previews_lock:
+                if _previews.get(key) is made:
+                    del _previews[key]  # not kept: the next one tries again
+    return made.result()
+
+
+def has_preview(path):
+    """True when preview(path) has the copy already, so it returns at once."""
+    try:
+        key = _preview_key(path)
+    except OSError:
+        return False
+    with _previews_lock:
+        made = _previews.get(key)
+    return made is not None and made.done() and made.exception() is None
+
+
+def read_image(path):
+    """(size, preview) of a picture to open for framing, read without changing anything.
+
+    Raises OSError, with a sentence as strerror, when it is not an image or is
+    animated: one cropped frame would freeze it.
+    """
+    try:
+        size = render.image_size(path)
+    except OSError as error:
+        raise OSError(None, "not an image wallframe can read") from error
+    if not render.is_still_image(path):
+        raise OSError(None, "animated images and videos cannot be framed")
+    return size, preview(path)
 
 
 class Picture:
@@ -57,7 +123,7 @@ class Picture:
         """
         self.framing = self.framing_for(path)
         self.image = path
-        self.thumb = render.thumbnail(path, PREVIEW_MAX)
+        self.thumb = preview(path)
 
     @property
     def portrait(self):
@@ -76,22 +142,17 @@ class Picture:
             self.use_image(self.applied_image)
         self.framing.restore(self.applied_framing)
 
-    def open_image(self, path):
+    def open_image(self, path, read=None):
         """Edits another picture, centered, keeping only the fill; Apply shows it.
 
+        `read` is read_image(path), when it was read already, off the main thread.
         Raises OSError, with a sentence as strerror, when it is not an image or
         is animated: one cropped frame would freeze it.
         """
-        try:
-            size = render.image_size(path)
-        except OSError as error:
-            raise OSError(None, "not an image wallframe can read") from error
-        if not render.is_still_image(path):
-            raise OSError(None, "animated images and videos cannot be framed")
+        size, thumb = read or read_image(path)
         framing = Framing(self.width, self.height, *size)
         framing.fill, framing.fill_color, framing.blur = (
             self.framing.fill, self.framing.fill_color, self.framing.blur)
-        thumb = render.thumbnail(path, PREVIEW_MAX)
         self.image = self.original = path
         self.upscaled = None
         self.framing, self.thumb = framing, thumb
@@ -123,7 +184,7 @@ class Monitor(Picture):
         self.framing = Framing(self.width, self.height, *render.image_size(self.image))
         if saved:
             self.framing.restore(saved)
-        self.thumb = render.thumbnail(self.image, PREVIEW_MAX)
+        self.thumb = preview(self.image)
         self.shown = output.image  # the file the monitor shows
         self.ignored = None        # a newer file the user chose to replace anyway
         self.mark_applied()
@@ -179,7 +240,7 @@ class Monitor(Picture):
         framing = self.saved_framing(entry)
         original = entry.get("original")
         original = original if original and os.path.exists(original) else source
-        return Snapshot(source, original, framing, render.thumbnail(source, PREVIEW_MAX))
+        return Snapshot(source, original, framing, preview(source))
 
     def take(self, snapshot):
         """Edits a read_snapshot() result."""
@@ -216,15 +277,16 @@ class Monitor(Picture):
         """
         self.show(daemon, self.make_crop(self.image, self.framing))
 
-    def make_crop(self, image, framing):
+    def make_crop(self, image, framing, loaded=None):
         """Writes the crop of `image` with `framing` to a new file and returns its path.
 
         The slow half of apply(), and it changes nothing, so it can run off the
-        main thread. Raises OSError if the image is gone or the crop cannot be written.
+        main thread. `loaded` is `image` read already (render.Loaded), shared with
+        other monitors. Raises OSError if the image is gone or the crop cannot be written.
         """
         path = self.store.new_crop_path(self.name)
         try:
-            render.crop(image, framing, path)
+            render.crop(loaded or image, framing, path)
         except OSError:
             if os.path.exists(path):
                 os.remove(path)  # a half-written file

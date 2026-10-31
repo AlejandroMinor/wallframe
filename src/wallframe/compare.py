@@ -1,4 +1,5 @@
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import gi
 
@@ -69,8 +70,9 @@ class CompareWindow(Gtk.Window):
     def render_both(self):
         """Off the main thread: a full-size render takes a moment on a big upscaled copy."""
         monitor = self.monitor
-        images = [render.compose(path, monitor.framing_for(path))
-                  for path in (monitor.original, monitor.upscaled)]
+        with ThreadPoolExecutor(max_workers=2) as pool:  # both at once
+            images = list(pool.map(lambda path: render.compose(path, monitor.framing_for(path)),
+                                   (monitor.original, monitor.upscaled)))
         GLib.idle_add(self.rendered, images)
 
     def rendered(self, images):

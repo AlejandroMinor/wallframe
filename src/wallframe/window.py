@@ -1,9 +1,13 @@
+import functools
+import math
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import cairo
 import gi
+from PIL import Image
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
@@ -16,7 +20,7 @@ from .framing import BLUR_RANGE, FILLS, MAX_ZOOM  # noqa: E402
 from . import aifill  # noqa: E402
 from .arrangements import Arrangements  # noqa: E402
 from .layouts import Layouts, pick  # noqa: E402
-from .monitor import Snapshot  # noqa: E402
+from .monitor import Snapshot, has_preview, read_image  # noqa: E402
 
 APP_ID = "io.github.AlejandroMinor.wallframe"
 # wallframe's own icons, for what the icon theme has no symbol for.
@@ -30,6 +34,10 @@ GALLERY_THUMB = gallery.THUMB_SIZE  # each picture in the wallpaper panel, as ma
 # the spacing, the scrollbar and the margins. Dragging the divider changes it.
 GALLERY_WIDTH = 2 * (GALLERY_THUMB[0] + 12) + 6 + 24 + 16
 GALLERY_CANVAS_MIN = 300  # what the canvas keeps at least when the panel opens
+# Pillow lets go of Python while it reads, resizes and saves pictures, so these run at
+# once: monitors cropped by Apply (each holds its picture whole, hence few), thumbnails.
+APPLY_THREADS = 4
+GALLERY_THREADS = min(8, os.cpu_count() or 1)
 # The transition's numbers in Settings: (key, label, low, high, step, tooltip).
 TRANSITION_NUMBERS = [
     ("duration", "Duration (s)", 0, 10, 0.1, "Seconds; simple and none ignore it"),
@@ -191,6 +199,45 @@ def to_surface(img):
                                               img.width, img.height, img.width * 4)
 
 
+class Scaled:
+    """A picture as cairo surfaces for the canvas: its own size, and smaller copies made
+    when they are needed and kept.
+
+    cairo shrinks a picture to less than 3/4 of its size with a filter that takes
+    twenty times longer than its quick one, on every frame, which made dragging stutter.
+    Drawn from the copy just larger than the canvas needs, made with Lanczos once, it
+    never shrinks that much, and looks as sharp.
+    """
+
+    STEP = 0.8  # each copy this much smaller than the last: above 3/4, cairo's quick filter
+
+    def __init__(self, image):
+        self.image = image
+        self.levels = {}  # k -> surface STEP**k the size of the picture
+        self._rgb = None
+
+    def rgb(self):
+        """The picture in RGB, made once: what the blurred fill is made from."""
+        if self._rgb is None:
+            self._rgb = self.image.convert("RGB")
+        return self._rgb
+
+    def surface(self, width):
+        """The smallest copy at least `width` screen pixels wide; the picture itself
+        when it is drawn larger."""
+        k, side = 0, self.image.width * self.STEP
+        while side >= width and side >= 1:
+            k, side = k + 1, side * self.STEP
+        if k not in self.levels:
+            image = self.image
+            if k:
+                factor = self.STEP ** k
+                image = image.resize((max(1, round(image.width * factor)),
+                                      max(1, round(image.height * factor))), Image.LANCZOS)
+            self.levels[k] = to_surface(image)
+        return self.levels[k]
+
+
 def icon_button(icon, tooltip, callback, toggle=False):
     button = (Gtk.ToggleButton if toggle else Gtk.Button)(
         icon_name=icon, tooltip_text=tooltip, focusable=False)
@@ -202,8 +249,18 @@ def card_preview(path):
     """A layout's preview at most LAYOUT_CARD in size, or None when it cannot be read.
 
     Scaled before it reaches the card: a picture's natural size is its file's, and a
-    wide preview would take a whole row of the grid.
+    wide preview would take a whole row of the grid. Read once until the file changes:
+    the cards are made again after each Apply.
     """
+    try:
+        status = os.stat(path)
+    except OSError:
+        return None
+    return _card_preview(path, status.st_ino, status.st_mtime_ns, status.st_size)
+
+
+@functools.lru_cache(maxsize=64)
+def _card_preview(path, _inode, _date, _size):
     try:
         small = render.thumbnail(path, max(LAYOUT_CARD))  # RGBA
     except OSError:
@@ -331,7 +388,7 @@ class Window(Gtk.ApplicationWindow):
         self.upscaler = upscaler  # None when Upscayl is not installed
         self.upscaling = {}       # monitor name -> the Cancel of its running upscale
         self.ai_step, self.ai_pictures = 0, 0  # picture being upscaled, of how many
-        self.previews = {}    # monitor name -> (image, mirror and rotation, cairo surface)
+        self.previews = {}    # monitor name -> (image, mirror and rotation, Scaled)
         self.backgrounds = {}  # monitor name -> (image, transform and fill, cairo surface)
         self.show_grid = True
         self.syncing = False  # set while code moves the zoom slider
@@ -342,6 +399,8 @@ class Window(Gtk.ApplicationWindow):
         self.dragged = None   # the span's monitor being dragged into place, by name
         self.selected = None  # the span's monitor the arrow keys move while arranging, by name
         self.held = None      # the canvas's (scale, origin) while it is dragged
+        self.opening = {}     # monitor name -> picture being read for it, off the main thread
+        self.apply_when_opened = False  # Apply asked for while a picture was being read
 
         # Size against the monitor the window opens on; without knowing which,
         # the smallest one, so it fits wherever it lands.
@@ -372,6 +431,8 @@ class Window(Gtk.ApplicationWindow):
         # Upscayl is a separate program and would outlive the window, still on the GPU.
         self.connect("close-request", lambda _w: self.cancel_upscales(self.upscaling))
         self.connect("close-request", lambda _w: self.remember_side_width() and False)
+        # Thumbnails still waiting are skipped: wallframe exits once those being made are.
+        self.connect("close-request", lambda _w: setattr(self, "gallery_shown", None) or False)
         self.select(start)
 
     def build_top_bar(self):
@@ -860,6 +921,8 @@ class Window(Gtk.ApplicationWindow):
             return
         if page == "wallpapers":
             self.fill_gallery()
+        elif page == "layouts" and self.layouts_stale:
+            self.fill_layouts()
         elif page == "desk":
             self.fill_arrangements()
 
@@ -958,7 +1021,7 @@ class Window(Gtk.ApplicationWindow):
             return
         self.gallery_shown = (folder, subfolders, found)
         self.gallery_grid.remove_all()
-        pictures, missing = {}, []
+        pictures, kept, missing = {}, [], []
         for path in found:
             # Whole, not cropped: a wide or tall picture shows all of itself.
             picture = Gtk.Picture(content_fit=Gtk.ContentFit.CONTAIN,
@@ -966,7 +1029,7 @@ class Window(Gtk.ApplicationWindow):
                                   height_request=GALLERY_THUMB[1])
             thumb = gallery.cached(path)
             if thumb:
-                picture.set_filename(thumb)
+                kept.append((path, thumb))
             else:
                 missing.append(path)
             name = os.path.relpath(path, folder)  # with its subfolder, when it is in one
@@ -977,27 +1040,47 @@ class Window(Gtk.ApplicationWindow):
         self.mark_gallery()
         self.filter_gallery()
         self.show_gallery_progress(0, len(missing))
-        if not missing:
+        if not found:
             return
         shown = self.gallery_shown
+        made = [0]  # thumbnails made, counted on the main thread
 
-        def made(path, thumb, done):
-            if self.gallery_shown is shown:
-                if thumb:
-                    pictures[path].set_filename(thumb)
-                self.show_gallery_progress(done, len(missing))
+        def put(path, texture, new):
+            if self.gallery_shown is not shown:
+                return
+            if texture:
+                pictures[path].set_paintable(texture)
+            if new:
+                made[0] += 1
+                self.show_gallery_progress(made[0], len(missing))
+
+        def load(path, thumb, new=False):
+            """Reads a thumbnail off the main thread, which only puts it in its place:
+            hundreds read there held the window up when the panel opened."""
+            try:
+                texture = Gdk.Texture.new_from_filename(thumb) if thumb else None
+            except GLib.Error:
+                texture = None
+            GLib.idle_add(lambda: put(path, texture, new) and False)
+
+        def make(path):
+            if self.gallery_shown is not shown:
+                return  # another folder by now: stop making these
+            try:
+                thumb = gallery.thumbnail(path)
+            except OSError:
+                thumb = None  # unreadable: its place stays empty
+            load(path, thumb, new=True)
 
         def work():
-            for done, path in enumerate(missing, 1):
-                if self.gallery_shown is not shown:
-                    return None  # another folder by now: stop making these
-                try:
-                    thumb = gallery.thumbnail(path)
-                except OSError:
-                    thumb = None  # unreadable: its place stays empty
-                GLib.idle_add(lambda path=path, thumb=thumb, done=done:
-                              made(path, thumb, done) and False)
-            return None
+            # Those made already first, newest first like the grid; then the rest,
+            # several at once.
+            with ThreadPoolExecutor(max_workers=GALLERY_THREADS) as pool:
+                for path, thumb in kept:
+                    pool.submit(lambda path=path, thumb=thumb:
+                                self.gallery_shown is shown and load(path, thumb))
+                for path in missing:
+                    pool.submit(make, path)
 
         self.in_background(work, lambda _result: None)
 
@@ -1054,8 +1137,9 @@ class Window(Gtk.ApplicationWindow):
     def pick_wallpaper(self, path):
         """Puts `path` on what is being edited, unless it has it already: the second
         click of a double click then keeps the framing, and Apply shows it."""
-        if self.monitor.original != path:
-            self.open_image(self.monitor, path)
+        monitor = self.monitor
+        if monitor.original != path and self.opening.get(monitor.name) != path:
+            self.open_image(monitor, path)
         self.mark_gallery()
 
     def choose_gallery_folder(self):
@@ -1104,11 +1188,20 @@ class Window(Gtk.ApplicationWindow):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         for widget in (row, self.layout_empty, scroll, Gtk.Separator(), shuffle):
             box.append(widget)
-        self.fill_layouts()
+        self.layouts_stale = True  # made when the tab first shows
         return box
+
+    def refresh_layouts(self):
+        """Lists the layouts again if their tab is shown, else when it next is."""
+        if self.side_panel.get_visible() and \
+                self.side_stack.get_visible_child_name() == "layouts":
+            self.fill_layouts()
+        else:
+            self.layouts_stale = True
 
     def fill_layouts(self):
         """One card per layout: click it to apply, ⋯ to rename, update, copy or delete."""
+        self.layouts_stale = False
         self.layout_list.remove_all()
         layouts = self.layouts.all()
         self.layout_empty.set_visible(not layouts)
@@ -1168,7 +1261,7 @@ class Window(Gtk.ApplicationWindow):
             action(layout, *args)
         except OSError as error:
             self.flash(f"Could not change {layout.name}: {error.strerror or error}", "error")
-        self.fill_layouts()
+        self.refresh_layouts()
 
     def confirm_delete_layout(self, layout):
         dialog = Gtk.AlertDialog(message=f"Delete {layout.name}?",
@@ -1193,7 +1286,7 @@ class Window(Gtk.ApplicationWindow):
             return
         self.layout_name.set_text("")
         self.set_focus(None)  # the keys go back to the editor
-        self.fill_layouts()
+        self.refresh_layouts()
         self.flash(f"Saved {name}", "success")
 
     def layout_span(self):
@@ -1250,7 +1343,7 @@ class Window(Gtk.ApplicationWindow):
         saves them in the layout and switches to it again. Cancelling one stops there,
         keeping the ones already chosen."""
         if not missing:
-            self.fill_layouts()
+            self.refresh_layouts()
             self.activate_layout(layout)
             return
         old, rest = missing[0], missing[1:]
@@ -1265,7 +1358,7 @@ class Window(Gtk.ApplicationWindow):
             try:
                 path = dialog.open_finish(result).get_path()
             except GLib.Error:  # cancelled
-                self.fill_layouts()
+                self.refresh_layouts()
                 return
             try:
                 updated = self.layouts.replace_image(layout, old, path)
@@ -1365,22 +1458,24 @@ class Window(Gtk.ApplicationWindow):
             action.connect("activate", lambda _a, _p, callback=callback: callback())
             self.add_action(action)
 
-    def export_color(self, framing, source):
+    def export_color(self, framing, picture):
         """(color, concern) for the empty space of an export for an AI: your fill color, or when
         the fill is blur, the vivid color least present in the picture. `concern` is None, or
-        (message, detail) when the AI could mistake the color for part of the picture."""
-        try:
-            small = render.thumbnail(source, 160).convert("RGB")
-        except OSError:
-            small = None
+        (message, detail) when the AI could mistake the color for part of the picture.
+
+        `picture` is the preview in memory: reading the file again took a second on a big PNG.
+        """
+        small = picture.copy()
+        small.thumbnail((160, 160))
+        small = small.convert("RGB")
         if framing.fill == "color":
             color = framing.fill_color
-            if small is None or aifill.share(small, color) < aifill.CLASH:
+            if aifill.share(small, color) < aifill.CLASH:
                 return color, None
             return color, ("The fill color is close to colors in your picture",
                            "An AI may take parts of the picture for empty space. Cancel to pick "
                            "another color in the Fill panel, or continue anyway.")
-        color, name = aifill.least_present(small) if small else aifill.CANDIDATES[0]
+        color, name = aifill.least_present(small)
         return color, ("The empty space is blurred",
                        "An AI fills the empty space best when it is a solid color that is not in "
                        "your picture. Cancel to pick one in the Fill panel (Fill: Color), or "
@@ -1408,7 +1503,7 @@ class Window(Gtk.ApplicationWindow):
         if framing.covers:
             self.flash("Nothing to fill: zoom out to leave empty space first", "warning")
             return
-        color, _concern = self.export_color(framing, self.monitor.image)
+        color, _concern = self.export_color(framing, self.monitor.thumb)
         text = aifill.prompt(color, framing.monitor_w, framing.monitor_h, framing.placement()[1])
         value = GObject.Value()
         value.init(GObject.TYPE_STRING)
@@ -1469,7 +1564,7 @@ class Window(Gtk.ApplicationWindow):
             self.flash("Nothing to fill: zoom out to leave empty space first", "warning")
             return
         source = monitor.image
-        color, concern = self.export_color(framing, source)
+        color, concern = self.export_color(framing, monitor.thumb)
         empty = f"{framing.empty_share:.0%}"
         if concern:
             concern = (concern[0], f"{empty} of the picture is empty space. {concern[1]}")
@@ -1549,25 +1644,45 @@ class Window(Gtk.ApplicationWindow):
         return self.monitor.framing
 
     def preview(self, monitor):
-        """The monitor's preview surface, rebuilt when the image, mirror or rotation change."""
+        """The monitor's preview, mirrored and rotated, as a Scaled; rebuilt when the
+        image, mirror or rotation change."""
         framing = monitor.framing
         key = (monitor.image, framing.flip_h, framing.flip_v, framing.rotation)
         cached = self.previews.get(monitor.name)
         if not cached or cached[0] != key:
-            cached = self.previews[monitor.name] = (key, to_surface(monitor.preview()))
+            cached = self.previews[monitor.name] = (key, Scaled(monitor.preview()))
         return cached[1]
 
-    def background(self, monitor):
-        """The fill behind a smaller image, at half the monitor size; rebuilt when it changes."""
+    def background(self, monitor, width):
+        """The fill behind a smaller image, `width` screen pixels wide, the canvas's size of
+        the monitor, and at most half the monitor's own. Rebuilt when it changes, or when
+        the canvas needs it larger, or much smaller."""
         framing = monitor.framing
         key = (monitor.image, framing.flip_h, framing.flip_v, framing.rotation,
                framing.fill, framing.fill_color, framing.blur, framing.backdrop.key())
+        need = max(1, min(monitor.width // 2, math.ceil(width)))
         cached = self.backgrounds.get(monitor.name)
-        if not cached or cached[0] != key:
-            size = (max(1, monitor.width // 2), max(1, monitor.height // 2))
-            surface = to_surface(render.background(monitor.preview(), framing, size))
-            cached = self.backgrounds[monitor.name] = (key, surface)
-        return cached[1]
+        if cached and cached[0] == key and need <= cached[1].get_width() <= need / 0.75:
+            return cached[1]  # within cairo's quick filter, see Scaled
+        # Some room both ways, so resizing the window does not remake it on every frame.
+        made = max(1, min(monitor.width // 2, math.ceil(need * 1.15)))
+        size = (made, max(1, round(made * monitor.height / monitor.width)))
+        rgb = self.preview(monitor).rgb()
+        surface = to_surface(render.background(rgb, framing, size))
+        self.backgrounds[monitor.name] = (key, surface)
+        return surface
+
+    def pixel_scale(self):
+        """Screen pixels per canvas pixel: 2 on a HiDPI screen, 1.25 at 125%.
+
+        Not cairo's: GTK records what draw() does and plays it back at the screen's
+        scale, so the context draw() gets knows nothing of it.
+        """
+        native = self.area.get_native()
+        surface = native.get_surface() if native else None
+        if surface is not None and hasattr(surface, "get_scale"):  # GTK 4.12: fractional
+            return surface.get_scale()
+        return self.area.get_scale_factor()
 
     def frame(self):
         """Returns (scale, fx, fy): canvas pixels per monitor pixel, frame origin.
@@ -1588,6 +1703,7 @@ class Window(Gtk.ApplicationWindow):
         monitor = self.monitor
         framing = monitor.framing
         scale, fx, fy = self.frame()
+        pixels = self.pixel_scale()
         frames = [(name, fx + x * scale, fy + y * scale, w * scale, h * scale)
                   for name, x, y, w, h in monitor.frames()]
         cr.set_source_rgb(0.08, 0.08, 0.08)
@@ -1595,7 +1711,7 @@ class Window(Gtk.ApplicationWindow):
 
         if not framing.covers:
             # The fill, inside the frames only, behind the image.
-            background = self.background(monitor)
+            background = self.background(monitor, monitor.width * scale * pixels)
             cr.save()
             for _name, x, y, w, h in frames:
                 cr.rectangle(x, y, w, h)
@@ -1608,10 +1724,11 @@ class Window(Gtk.ApplicationWindow):
             cr.restore()
 
         # The whole image, at its current position relative to the frame.
-        preview = self.preview(monitor)
+        drawn = framing.zoom * scale * framing.image_w  # the whole image's width on the canvas
+        preview = self.preview(monitor).surface(drawn * pixels)
         cr.save()
         cr.translate(fx + framing.x * scale, fy + framing.y * scale)
-        image_scale = framing.zoom * scale * framing.image_w / preview.get_width()
+        image_scale = drawn / preview.get_width()
         cr.scale(image_scale, image_scale)
         cr.set_source_surface(preview, 0, 0)
         # While the background moves, the image fades so the background shows through,
@@ -2096,18 +2213,58 @@ class Window(Gtk.ApplicationWindow):
         return True
 
     def open_image(self, monitor, path):
-        """Puts `path` on `monitor` in the editor, marked for Apply."""
+        """Puts `path` on `monitor` in the editor, marked for Apply.
+
+        A picture not read lately is read off the main thread, as a big one takes a
+        second: the window goes on meanwhile, and the last picture asked for wins.
+        """
+        if has_preview(path):
+            self.put_image(monitor, path, None)
+            return
+        self.opening[monitor.name] = path
+        self.flash(f"Opening {os.path.basename(path)}…", "accent")
+
+        def work():
+            try:
+                return read_image(path)
+            except OSError as error:
+                return error
+
+        def then(read):
+            if self.opening.get(monitor.name) != path:
+                return False  # another picture was asked for meanwhile
+            if self.applying:  # Apply reads the monitors: after it
+                GLib.timeout_add(200, then, read)
+                return False
+            del self.opening[monitor.name]
+            opened = self.put_image(monitor, path, read)
+            if self.apply_when_opened and not self.opening:
+                self.apply_when_opened = False
+                if opened:
+                    self.apply()  # a double click on a picture not read yet
+            return False
+
+        self.in_background(work, then)
+
+    def put_image(self, monitor, path, read):
+        """open_image() once the picture is read, or `read` is the OSError it gave.
+        True when it is on the monitor."""
         try:
-            monitor.open_image(path)
+            if isinstance(read, OSError):
+                raise read
+            monitor.open_image(path, read)
         except OSError as error:
             self.flash(f"Cannot open {os.path.basename(path)}: {error.strerror or error}",
                        "error")
-            return
+            return False
         if monitor is self.monitor:
             self.move_backdrop.set_active(False)
+        if self.side_panel.get_visible():
+            self.mark_gallery()
         self.refresh()
         self.flash(f"{os.path.basename(path)} on {monitor.name} · frame it, then Apply",
                    "accent")
+        return True
 
     def on_grid_button(self):
         self.show_grid = self.grid_button.get_active()
@@ -2279,7 +2436,11 @@ class Window(Gtk.ApplicationWindow):
             self.sync_with_daemon(ask_postponed=False)
 
     def apply(self):
-        """Checks for wallpapers changed elsewhere first, so none is overwritten unasked."""
+        """Checks for wallpapers changed elsewhere first, so none is overwritten unasked.
+        While a picture is being read, it waits for it."""
+        if self.opening:
+            self.apply_when_opened = True
+            return
         if not self.asking:
             self.sync_with_daemon(then=self.apply_touched)
 
@@ -2337,27 +2498,35 @@ class Window(Gtk.ApplicationWindow):
         self.set_busy(what)
 
         def work():
-            """The slow part, which reads the monitors and changes none of them."""
-            results = []  # (monitor, snapshot, crop path, error, picture that failed to load)
-            for monitor, entry in jobs:
+            """The slow part, which reads the monitors and changes none of them.
+
+            The monitors are cropped at the same time, and each picture is read once
+            however many of them show it: all of them, in a span.
+            """
+            loaded = {}  # picture -> render.Loaded
+
+            def one(job):
+                """(monitor, snapshot, crop path, error, picture that failed to load)"""
+                monitor, entry = job
                 try:
                     snapshot = (entry if isinstance(entry, Snapshot)
                                 else monitor.read_snapshot(entry) if entry else None)
                 except OSError as error:  # gone or unreadable: the other monitors still apply
-                    results.append((monitor, None, None, error, entry["source"]))
-                    continue
+                    return (monitor, None, None, error, entry["source"])
                 image, framing = ((snapshot.source, snapshot.framing) if snapshot
                                   else (monitor.image, monitor.framing))
                 if snapshot and not monitor.touched and (image, framing.key()) == (
                         monitor.applied_image, monitor.applied):
-                    results.append((monitor, snapshot, None, None, None))  # shows it already
-                    continue
+                    return (monitor, snapshot, None, None, None)  # shows it already
+                picture = loaded.setdefault(image, render.Loaded(image))
                 try:
-                    results.append((monitor, snapshot, monitor.make_crop(image, framing),
-                                    None, None))
+                    return (monitor, snapshot, monitor.make_crop(image, framing, picture),
+                            None, None)
                 except OSError as error:
-                    results.append((monitor, snapshot, None, error, None))
-            return results
+                    return (monitor, snapshot, None, error, None)
+
+            with ThreadPoolExecutor(max_workers=max(1, min(len(jobs), APPLY_THREADS))) as pool:
+                return list(pool.map(one, jobs))  # in the order of the jobs
 
         def finish(results):
             failed, changed = [], []
@@ -2382,7 +2551,7 @@ class Window(Gtk.ApplicationWindow):
                 self.upscaler.clean(in_use | self.monitors[0].store.images_in_use()
                                     | self.layouts.images_in_use())
             self.refresh()
-            self.fill_layouts()  # marks the card of what the monitors show now
+            self.refresh_layouts()  # marks the card of what the monitors show now
             done(failed)
             if changed:
                 self.run_post_command(changed)
