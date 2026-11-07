@@ -7,7 +7,7 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
 from . import render  # noqa: E402
-from .window import icon_button, to_surface  # noqa: E402
+from .window import icon_button, on_main, to_surface  # noqa: E402
 
 VIEW_MAX = (900, 560)  # the part of the monitor shown, in real monitor pixels
 HANDLE = 14            # how close to the line a drag grabs it instead of the image
@@ -73,7 +73,7 @@ class CompareWindow(Gtk.Window):
         with ThreadPoolExecutor(max_workers=2) as pool:  # both at once
             images = list(pool.map(lambda path: render.compose(path, monitor.framing_for(path)),
                                    (monitor.original, monitor.upscaled)))
-        GLib.idle_add(self.rendered, images)
+        on_main(self.rendered, images)
 
     def rendered(self, images):
         self.surfaces = [to_surface(image) for image in images]

@@ -207,6 +207,16 @@ def to_surface(img):
                                               img.width, img.height, img.width * 4)
 
 
+def on_main(callback, *args):
+    """Runs callback(*args) on the main thread, from any thread, ahead of the redraws.
+
+    GLib.idle_add alone waits below GTK's redraws, and a window that takes a whole
+    frame to draw, as with a spinner over a full gallery, redraws without end: the
+    work that would stop the spinner never ran.
+    """
+    GLib.idle_add(callback, *args, priority=GLib.PRIORITY_DEFAULT)
+
+
 class Scaled:
     """A picture as cairo surfaces for the canvas: its own size, and smaller copies made
     when they are needed and kept.
@@ -1080,7 +1090,7 @@ class Window(Gtk.ApplicationWindow):
                 texture = Gdk.Texture.new_from_filename(thumb) if thumb else None
             except GLib.Error:
                 texture = None
-            GLib.idle_add(lambda: put(path, texture, new) and False)
+            on_main(lambda: put(path, texture, new) and False)
 
         def make(path):
             if self.gallery_shown is not shown:
@@ -2171,12 +2181,12 @@ class Window(Gtk.ApplicationWindow):
         def report(line):
             done = upscalers.percent(line)
             if done is not None:
-                GLib.idle_add(self.ai_step_advanced, done)
+                on_main(self.ai_step_advanced, done)
 
         def work():
             results, errors = {}, {}
             for step, original in enumerate(originals, start=1):
-                GLib.idle_add(self.ai_step_started, step, len(originals))
+                on_main(self.ai_step_started, step, len(originals))
                 try:
                     results[original] = self.upscaler.upscale(original, model, scale, report,
                                                               cancel)
@@ -2184,7 +2194,7 @@ class Window(Gtk.ApplicationWindow):
                     errors[original] = failure
                 except Cancelled:
                     break
-            GLib.idle_add(self.upscaled, targets, results, errors, scale, cancel.requested)
+            on_main(self.upscaled, targets, results, errors, scale, cancel.requested)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -2632,7 +2642,7 @@ class Window(Gtk.ApplicationWindow):
         """Runs work() on another thread, then then(its result) back on the main one."""
         def run():
             result = work()
-            GLib.idle_add(lambda: then(result) and False)  # False: run once
+            on_main(lambda: then(result) and False)  # False: run once
 
         threading.Thread(target=run, daemon=True).start()
 

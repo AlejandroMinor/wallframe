@@ -20,10 +20,25 @@ from wallframe.layouts import Layouts  # noqa: E402
 from wallframe.monitor import Monitor, has_preview  # noqa: E402
 from wallframe.state import Store  # noqa: E402
 from wallframe.window import (EXPORT_MENU, LABEL_SIZE, NUDGE, NUDGE_SHIFT, Scaled,  # noqa: E402
-                              Window, accent_css, build_menu, centimeter_labels, stamp)
+                              Window, accent_css, build_menu, centimeter_labels, on_main, stamp)
 from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
 NO_DAEMON = "wallframe-no-existe-este-programa"
+REDRAW_PRIORITY = GLib.PRIORITY_HIGH_IDLE + 20  # GDK_PRIORITY_REDRAW
+
+
+def test_work_from_a_thread_reaches_a_window_that_never_stops_redrawing():
+    """Apply stayed on "Applying the span…" for good on a full gallery: the spinner
+    kept the window redrawing, and the crops, already made, never reached it."""
+    redraws = GLib.idle_add(lambda: True, priority=REDRAW_PRIORITY)
+    reached = []
+    try:
+        on_main(reached.append, "crops")
+        for _ in range(5):
+            GLib.MainContext.default().iteration(False)
+    finally:
+        GLib.source_remove(redraws)
+    assert reached == ["crops"]
 
 
 class UntouchableDaemon:
