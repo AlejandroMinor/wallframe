@@ -1,0 +1,28 @@
+name: Linux
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install GTK and Python
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gir1.2-gtk-4.0 python3-gi \
+            python3-gi-cairo python3-pil python3-pytest xvfb
+
+      # A virtual display, so the tests that build the real window run too.
+      - name: Tests
+        timeout-minutes: 15
+        env:
+          PYTHONPATH: src
+        run: xvfb-run -a python3 -m pytest -v -o faulthandler_timeout=60
