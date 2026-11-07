@@ -2,6 +2,7 @@
 picture across all of them, then apply it."""
 
 import sys
+from concurrent.futures import ThreadPoolExecutor
 
 from . import desktops, render, span, upscalers, window
 from .layouts import Layouts
@@ -19,8 +20,12 @@ def main():
 
     info = desktop.info()
     store = Store()
-    monitors = [Monitor(o, store, info.models.get(o.name, ""))
-                for o in daemon.outputs() if render.is_still_image(o.image)]
+    outputs = [o for o in daemon.outputs() if render.is_still_image(o.image)]
+    # Each monitor reads its picture for the preview, up to a second for a big one: all at
+    # once, and one read for monitors that show the same picture.
+    with ThreadPoolExecutor() as pool:
+        monitors = list(pool.map(lambda o: Monitor(o, store, info.models.get(o.name, "")),
+                                 outputs))
     if not monitors:
         notify("Animated and video wallpapers cannot be adjusted.")
         return 1

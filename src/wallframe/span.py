@@ -5,7 +5,7 @@ import os
 
 from . import render
 from .framing import Framing
-from .monitor import PREVIEW_MAX, Picture, Snapshot
+from .monitor import Picture, Snapshot, preview
 
 ASPECT_SLACK = 0.1  # an EDID size this far off the monitor's shape is not trusted
 YAW_LIMIT = 75      # degrees either way: past this a monitor shows next to nothing
@@ -187,7 +187,7 @@ class Span(Picture):
         self.original = original if original and os.path.exists(original) else source
         self.image, self.framing = source, framing
         self.upscaled = source if source != self.original else None
-        self.thumb = thumb or render.thumbnail(source, PREVIEW_MAX)
+        self.thumb = thumb or preview(source)
 
     def snapshot(self):
         """What state.json and a layout keep of the span: picture, framing and

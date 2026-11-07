@@ -135,3 +135,14 @@ def test_background_from_a_thumbnail_with_rounded_height(tmp_path):
     f.zoom_at(0.5, 1280, 720)
     thumb = Image.new("RGB", (2048, 1020), (10, 20, 30))
     assert render.background(thumb, f, (1280, 720)).size == (1280, 720)
+
+
+def test_a_picture_read_once_crops_like_its_file(tmp_path):
+    source = quadrants(tmp_path / "src.png")
+    loaded = render.Loaded(source)
+    for framing in (Framing(90, 160, 400, 200), Framing(160, 90, 400, 200)):
+        framing.mirror(horizontal=True)
+        from_file = render.compose(source, framing)
+        assert render.compose(loaded, framing).tobytes() == from_file.tobytes()
+    assert len(loaded._turned) == 1                     # one mirrored copy for both monitors
+

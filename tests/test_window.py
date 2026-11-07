@@ -6,6 +6,7 @@ display; it is skipped when GTK is missing, like the rest of the editor.
 """
 
 import os
+import time
 
 import pytest
 
@@ -16,10 +17,10 @@ from wallframe import config, gallery, span, upscalers  # noqa: E402
 from wallframe.commands import Cancel  # noqa: E402
 from wallframe.daemons import Daemon, Output  # noqa: E402
 from wallframe.layouts import Layouts  # noqa: E402
-from wallframe.monitor import Monitor  # noqa: E402
+from wallframe.monitor import Monitor, has_preview  # noqa: E402
 from wallframe.state import Store  # noqa: E402
-from wallframe.window import (EXPORT_MENU, LABEL_SIZE, NUDGE, NUDGE_SHIFT, Window,  # noqa: E402
-                              accent_css, build_menu, centimeter_labels, stamp)
+from wallframe.window import (EXPORT_MENU, LABEL_SIZE, NUDGE, NUDGE_SHIFT, Scaled,  # noqa: E402
+                              Window, accent_css, build_menu, centimeter_labels, stamp)
 from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
 NO_DAEMON = "wallframe-no-existe-este-programa"
@@ -97,6 +98,8 @@ class StandIn:
         self.upscaling = {}
         self.flashed, self.reported = [], []
         self.applying = None
+        self.opening = {}
+        self.apply_when_opened = False
         self.busy = []  # every set_busy() call, to see the window paused and resumed
         self.closed = False
 
@@ -559,7 +562,9 @@ def test_an_opened_image_waits_for_apply(tmp_path):
     other = wallpaper(tmp_path, "beach.png")
     Window.open_image(window, monitor, other)
     assert monitor.image == other and monitor.touched
-    assert window.flashed == [("accent", "beach.png on DP-1 · frame it, then Apply")]
+    assert window.flashed == [("accent", "Opening beach.png…"),   # read off the main thread
+                              ("accent", "beach.png on DP-1 · frame it, then Apply")]
+    assert window.opening == {}
 
 
 def test_a_file_that_is_not_an_image_says_so(tmp_path):
@@ -569,8 +574,8 @@ def test_a_file_that_is_not_an_image_says_so(tmp_path):
     notes.write_text("hello")
     Window.open_image(window, monitor, str(notes))
     assert not monitor.touched
-    assert window.flashed == [("error",
-                               "Cannot open notes.txt: not an image wallframe can read")]
+    assert window.flashed[-1] == ("error",
+                                  "Cannot open notes.txt: not an image wallframe can read")
 
 
 # --- Keys: Ctrl and Alt belong to the desktop
@@ -892,3 +897,52 @@ def test_the_accent_is_the_desktops_when_it_sets_one():
 
 def test_without_a_desktop_accent_the_theme_selection_color_stands_in():
     assert "mix(@theme_selected_bg_color, @theme_fg_color" in accent_css(None)
+
+
+def test_the_canvas_draws_from_a_copy_cairo_shrinks_quickly():
+    """cairo shrinks below 3/4 with a filter twenty times slower: never asked to."""
+    scaled = Scaled(Image.new("RGBA", (2048, 1152)))
+    for width in (2048, 1500, 1000, 333, 40, 1):
+        drawn_from = scaled.surface(width).get_width()
+        assert width <= drawn_from and width / drawn_from >= 0.75
+    assert scaled.surface(4000).get_width() == 2048      # larger: the picture itself
+    assert scaled.surface(1000) is scaled.surface(1001)  # made once, kept
+
+
+def test_apply_waits_for_a_picture_still_being_read(tmp_path):
+    monitor = monitor_on(tmp_path, "DP-1", 90, 160, wallpaper(tmp_path))
+    window = StandIn([monitor], UntouchableDaemon())
+    window.opening = {"DP-1": wallpaper(tmp_path, "beach.png")}
+    Window.apply(window)                                 # a double click on it, say
+    assert window.apply_when_opened and not window.busy
+
+
+def test_a_second_click_on_a_picture_being_read_does_not_read_it_again(tmp_path):
+    monitor = monitor_on(tmp_path, "DP-1", 90, 160, wallpaper(tmp_path))
+    window = StandIn([monitor])
+    beach = wallpaper(tmp_path, "beach.png")
+    window.opening = {"DP-1": beach}
+    window.open_image = lambda *_args: pytest.fail("read twice")
+    window.mark_gallery = lambda: None
+    Window.pick_wallpaper(window, beach)
+
+
+def test_resting_on_a_picture_reads_it_ahead(tmp_path):
+    monitor = monitor_on(tmp_path, "DP-1", 90, 160, wallpaper(tmp_path))
+    window = StandIn([monitor])
+    window.gallery_hovered = window.gallery_hover_timer = None
+    beach = wallpaper(tmp_path, "beach.png")
+
+    class Child:
+        path = beach
+
+    Window.hover_gallery(window, Child())
+    assert window.gallery_hover_timer                    # waits for the pointer to rest
+    while window.gallery_hover_timer:
+        GLib.MainContext.default().iteration(True)       # until it rests long enough
+    deadline = time.monotonic() + 5
+    while not has_preview(beach) and time.monotonic() < deadline:
+        time.sleep(0.02)                                 # read on another thread
+    assert has_preview(beach)                            # a click now opens it at once
+    Window.hover_gallery(window, None)                  # the pointer left the panel
+    assert window.gallery_hovered is None
