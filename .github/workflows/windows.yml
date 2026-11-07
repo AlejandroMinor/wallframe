@@ -47,7 +47,9 @@ jobs:
                   print("wallpaper:", path, "refused:", error)
           EOF
 
+      # Verbose, so a test that hangs is the last one named when the limit stops it.
       - name: Tests
+        timeout-minutes: 15
         env:
           PYTHONPATH: src
-        run: python -m pytest -q
+        run: python -m pytest -v
