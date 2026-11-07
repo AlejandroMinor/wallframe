@@ -100,6 +100,24 @@ def test_own_apply_is_not_a_change(tmp_path):
     assert not m.changed(daemon.shown["DP-1"])
 
 
+def test_an_old_crop_windows_still_reads_does_not_fail_the_apply(tmp_path, monkeypatch):
+    """The wallpaper had changed, but Apply said it could not, and asked about it later."""
+    m = portrait_monitor(tmp_path)
+    daemon = FakeDaemon()
+    m.edit("mirror")
+    m.apply(daemon)
+
+    def locked(path):
+        raise PermissionError(13, "in use by another process", path)
+
+    m.edit("flip")
+    with monkeypatch.context() as patched:
+        patched.setattr(os, "remove", locked)
+        m.apply(daemon)
+    assert not m.touched
+    assert not m.changed(daemon.shown["DP-1"])
+
+
 def test_own_crop_as_windows_spells_it_is_not_a_change(tmp_path, monkeypatch):
     """Each Apply asked about every monitor: "has a new wallpaper", the crop just set."""
     m = portrait_monitor(tmp_path)

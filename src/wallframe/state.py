@@ -59,7 +59,10 @@ class Store:
         for name in os.listdir(self.directory):
             path = os.path.join(self.directory, name)
             if own.fullmatch(name) and path != keep:
-                os.remove(path)
+                try:
+                    os.remove(path)
+                except PermissionError:
+                    pass  # Windows is still reading it: the next Apply deletes it
 
     def remember(self, monitor, crop, source, framing, original=None):
         """Saves that `monitor` shows `crop`, made from `source` with `framing`.

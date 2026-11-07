@@ -39,6 +39,24 @@ def test_remember_then_resume_from_the_original(tmp_path):
     assert restored.key() == f.key()
 
 
+def test_a_crop_windows_still_reads_waits_for_the_next_apply(tmp_path, monkeypatch):
+    store = Store(tmp_path)
+    old, new = tmp_path / "DP-1-1.png", tmp_path / "DP-1-2.png"
+    old.write_bytes(b"")
+    new.write_bytes(b"")
+
+    def locked(path):
+        raise PermissionError(13, "in use by another process", path)
+
+    with monkeypatch.context() as patched:
+        patched.setattr(os, "remove", locked)
+        store.remove_old_crops("DP-1", keep=str(new))
+    assert old.exists()
+
+    store.remove_old_crops("DP-1", keep=str(new))
+    assert not old.exists() and new.exists()
+
+
 def test_resumes_from_the_crop_as_windows_spells_it(tmp_path, monkeypatch):
     store = Store(tmp_path)
     source = tmp_path / "original.jpg"
