@@ -8,6 +8,7 @@ the script itself and not only the Python that writes it.
 import json
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -113,6 +114,11 @@ def test_a_fresh_desktop_shows_the_default_package(wallpapers):
     assert portrait == str(next_images / "1440x2960.png")    # the upright one
 
 
+# Plasma runs only on Linux; on Windows, paths and file URLs are written otherwise.
+linux_paths = pytest.mark.skipif(sys.platform == "win32", reason="Plasma runs only on Linux")
+
+
+@linux_paths
 def test_a_package_can_be_named_by_folder_url_or_name(wallpapers):
     mountain = package(wallpapers, "Mountain", "3840x2160")
     expected = str(mountain / "contents" / "images" / "3840x2160.png")
@@ -130,6 +136,7 @@ def test_no_plasmashell_reads_as_no_daemon():
     assert Plasma(gone, dict).outputs() == []
 
 
+@linux_paths
 def test_set_image_sends_the_path_safely():
     """A quote in a file name must not end the JavaScript string."""
     evaluate = answering(DESKTOPS)

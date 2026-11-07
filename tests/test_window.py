@@ -741,7 +741,7 @@ def window_names():
     """(attributes the window assigns on itself, methods it defines), read from its source."""
     import ast
     tree = ast.parse(open(os.path.join(os.path.dirname(__file__), "..", "src", "wallframe",
-                                       "window.py")).read())
+                                       "window.py"), encoding="utf-8").read())
     window = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Window")
     methods = {n.name for n in window.body if isinstance(n, ast.FunctionDef)}
     attributes = {t.attr for n in ast.walk(window) if isinstance(n, ast.Assign)

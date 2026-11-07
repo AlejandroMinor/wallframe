@@ -11,6 +11,7 @@ def session(monkeypatch):
     """A clean environment: set only the variables each test's session sets."""
     for variable in ("XDG_CURRENT_DESKTOP", "HYPRLAND_INSTANCE_SIGNATURE", "SWAYSOCK"):
         monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setattr(windows.sys, "platform", "linux")  # these are Linux sessions
     return monkeypatch.setenv
 
 
