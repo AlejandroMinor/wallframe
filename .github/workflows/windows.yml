@@ -1,0 +1,53 @@
+name: Windows
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gtk4
+            mingw-w64-ucrt-x86_64-python-gobject
+            mingw-w64-ucrt-x86_64-python-cairo
+            mingw-w64-ucrt-x86_64-python-pillow
+            mingw-w64-ucrt-x86_64-python-pytest
+
+      # The calls win32.py makes, on a real Windows. The runner has no one logged
+      # in, so the shell may refuse the wallpaper (an OSError, printed); a wrong
+      # call to Windows raises anything else, and fails the job.
+      - name: Ask Windows for the monitors and their wallpaper
+        env:
+          PYTHONPATH: src
+        run: |
+          python - <<'EOF'
+          from wallframe import windows
+          desktop = windows.Desktop()
+          print("screens:", desktop.system.screens())
+          print("focused:", desktop.system.focused())
+          print("info:", desktop.info())
+          print("sizes:", desktop.sizes())
+          print("accent:", desktop.accent())
+          for path, _rect, _scale in desktop.system.screens():
+              try:
+                  print("wallpaper:", path, "->", repr(desktop.system.wallpaper(path)))
+              except OSError as error:
+                  print("wallpaper:", path, "refused:", error)
+          EOF
+
+      - name: Tests
+        env:
+          PYTHONPATH: src
+        run: python -m pytest -q
