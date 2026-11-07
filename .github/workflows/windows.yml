@@ -47,9 +47,10 @@ jobs:
                   print("wallpaper:", path, "refused:", error)
           EOF
 
-      # Verbose, so a test that hangs is the last one named when the limit stops it.
+      # Verbose, so a test that hangs is the last one named; past a minute, it also
+      # prints where it is stuck.
       - name: Tests
         timeout-minutes: 15
         env:
           PYTHONPATH: src
-        run: python -m pytest -v
+        run: python -m pytest -v -o faulthandler_timeout=60

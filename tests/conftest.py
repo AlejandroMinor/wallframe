@@ -1,6 +1,6 @@
 import pytest
 
-from wallframe import config, gallery
+from wallframe import commands, config, gallery
 
 
 @pytest.fixture(autouse=True)
@@ -9,6 +9,14 @@ def no_user_config(tmp_path, monkeypatch):
     nor their thumbnail cache."""
     monkeypatch.setattr(config, "CONFIG_FILE", str(tmp_path / "config" / "config.ini"))
     monkeypatch.setattr(gallery, "CACHE_DIR", str(tmp_path / "cache"))
+
+
+@pytest.fixture(autouse=True)
+def no_message_box(monkeypatch):
+    """On Windows, notify() opens a box that waits for a click no one gives."""
+    boxes = []
+    monkeypatch.setattr(commands, "message_box", boxes.append)
+    return boxes
 
 
 def pytest_configure(config):

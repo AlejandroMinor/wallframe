@@ -21,6 +21,20 @@ def calls(monkeypatch):
     return ran
 
 
+@pytest.fixture(autouse=True)
+def on_linux(monkeypatch):
+    """The tests of notify-send and Hyprland hold on Windows too."""
+    monkeypatch.setattr(commands.sys, "platform", "linux")
+
+
+def test_windows_shows_a_message_box(monkeypatch, calls, no_message_box, capsys):
+    monkeypatch.setattr(commands.sys, "platform", "win32")
+    monkeypatch.setattr(commands.shutil, "which", lambda name: "/usr/bin/" + name)
+    commands.notify("No image wallpaper found.")
+    assert no_message_box == ["No image wallpaper found."] and calls == []
+    assert capsys.readouterr().err == "wallframe: No image wallpaper found.\n"
+
+
 def test_prefers_notify_send(monkeypatch, calls, capsys):
     monkeypatch.setattr(commands.shutil, "which", lambda name: "/usr/bin/" + name)
     monkeypatch.setenv("HYPRLAND_INSTANCE_SIGNATURE", "abc")

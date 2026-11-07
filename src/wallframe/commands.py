@@ -136,10 +136,15 @@ def notify(message):
     """
     print(f"wallframe: {message}", file=sys.stderr)
     if sys.platform == "win32":
-        import ctypes
-        ctypes.windll.user32.MessageBoxW(None, message, "wallframe", 0x10)  # MB_ICONERROR
+        message_box(message)
     elif shutil.which("notify-send"):
         run(["notify-send", "wallframe", message])
     elif os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
         # Error icon, 5000 ms, default color.
         run(["hyprctl", "notify", "3", "5000", "0", f"wallframe: {message}"])
+
+
+def message_box(message):
+    """Windows' error box; it waits for OK, so the tests replace it (see conftest.py)."""
+    import ctypes
+    ctypes.windll.user32.MessageBoxW(None, message, "wallframe", 0x10)  # MB_ICONERROR
