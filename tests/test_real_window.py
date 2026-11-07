@@ -42,7 +42,7 @@ class Clipboard:
         self.set = True
 
 
-def in_window(tmp_path, body, with_span=True):
+def in_window(tmp_path, body, with_span=True, focused="DP-1"):
     """Builds the real window (not shown), runs body(window), and gives back what it raised."""
     monitors, positions = two_monitors(tmp_path, right=(400, 200))
     across = span.make(monitors, positions, sizes=SIZES) if with_span else None
@@ -51,7 +51,7 @@ def in_window(tmp_path, body, with_span=True):
 
     def activate(app):
         try:
-            window = Window(app, monitors, Daemon(), start, "DP-1", None,
+            window = Window(app, monitors, Daemon(), start, focused, None,
                             Layouts(str(tmp_path / "layouts")), positions, across)
             window.refresh()
             body(window)
@@ -242,3 +242,12 @@ def test_reset_to_default_puts_the_desk_back(tmp_path):
 
     in_window(tmp_path, body)
 
+
+
+def test_the_window_fits_a_scaled_monitor_by_its_logical_size(tmp_path):
+    """DP-2 has 400x200 real pixels, and 200x100 logical ones: a window has only those."""
+    def body(window):
+        assert window.get_default_size().width == 160
+        assert window.get_default_size().height == 70
+
+    in_window(tmp_path, body, focused="DP-2")

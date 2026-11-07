@@ -994,3 +994,59 @@ def test_a_monitor_whose_picture_cannot_be_read_stays_out_and_the_others_open(tm
     broken = tmp_path / "broken.png"
     broken.write_bytes(b"not a picture")
     assert open_monitor(Output("DP-1", 90, 160, str(broken)), Store(tmp_path), "") is None
+
+
+def test_anything_a_crop_raises_ends_apply_and_is_told(tmp_path, monkeypatch):
+    """Not only an OSError: on its thread, anything else left Apply on its spinner."""
+    monitor = monitor_on(tmp_path, "DP-1", 90, 160, wallpaper(tmp_path))
+    monitor.edit("rotate")
+
+    def fails(*_args):
+        raise MemoryError("no room for this picture")
+
+    monkeypatch.setattr(monitor, "make_crop", fails)
+    window = StandIn([monitor], UntouchableDaemon())
+    Window.apply_touched(window)
+    assert window.flashed[0][0] == "error"
+    assert "no room for this picture" in window.flashed[0][1]
+    assert window.busy[-1] is None
+
+
+def test_a_layout_with_a_broken_picture_ends_and_is_told(tmp_path, monkeypatch):
+    monitor = monitor_on(tmp_path, "DP-1", 90, 160, wallpaper(tmp_path))
+    entry = dict(monitor.snapshot(), source=str(tmp_path / "other.png"))
+    Image.new("RGB", (300, 300)).save(entry["source"])
+
+    def broken(_entry):
+        raise SyntaxError("broken PNG file")
+
+    monkeypatch.setattr(monitor, "read_snapshot", broken)
+    window = StandIn([monitor], UntouchableDaemon())
+    done = []
+    Window.apply_monitors(window, [(monitor, entry)], "a layout", done.append)
+    assert "broken PNG file" in done[0][0]
+    assert window.busy[-1] is None
+
+
+def test_a_new_wallpaper_that_cannot_be_read_leaves_the_editor_as_it_was(tmp_path, monkeypatch):
+    monitor = monitor_on(tmp_path, "DP-1", 90, 160, wallpaper(tmp_path))
+    window = StandIn([monitor], UntouchableDaemon())
+
+    def broken(_output):
+        raise SyntaxError("broken PNG file")
+
+    monkeypatch.setattr(monitor, "load", broken)
+    assert not Window.reload(window, monitor, Output("DP-1", 90, 160, "/new.png"))
+    assert window.flashed[0][0] == "error"
+
+
+def test_a_file_dialog_starts_beside_the_picture_or_in_the_folder_for_ones_own(tmp_path,
+                                                                               monkeypatch):
+    image = wallpaper(tmp_path)
+    monitor = monitor_on(tmp_path, "DP-1", 90, 160, image)
+    window = StandIn([monitor], UntouchableDaemon())
+    assert window.start_folder() == os.path.dirname(image)
+
+    monkeypatch.setattr(config, "wallpaper_folder", lambda _default: "/fondos")
+    monitor.original = os.path.join(monitor.store.directory, "blank-90x160.png")
+    assert window.start_folder() == "/fondos"

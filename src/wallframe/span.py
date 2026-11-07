@@ -133,7 +133,7 @@ class Span(Picture):
         if saved:
             try:
                 self.take(saved)
-            except (KeyError, OSError):  # its picture is gone, or cannot be read
+            except (KeyError, *render.UNREADABLE):  # its picture is gone, or cannot be read
                 saved = None
         if not saved:
             self.follow(monitors[0])

@@ -90,7 +90,7 @@ class Upscaler:
             if not any(paths.same_file(path, kept) for kept in keep):
                 try:
                     os.remove(path)
-                except PermissionError:
+                except OSError:
                     pass  # in use on Windows, as the file Upscayl is writing: next time
 
 

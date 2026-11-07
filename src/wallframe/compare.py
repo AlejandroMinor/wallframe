@@ -70,9 +70,14 @@ class CompareWindow(Gtk.Window):
     def render_both(self):
         """Off the main thread: a full-size render takes a moment on a big upscaled copy."""
         monitor = self.monitor
-        with ThreadPoolExecutor(max_workers=2) as pool:  # both at once
-            images = list(pool.map(lambda path: render.compose(path, monitor.framing_for(path)),
-                                   (monitor.original, monitor.upscaled)))
+        try:
+            with ThreadPoolExecutor(max_workers=2) as pool:  # both at once
+                images = list(pool.map(
+                    lambda path: render.compose(path, monitor.framing_for(path)),
+                    (monitor.original, monitor.upscaled)))
+        except render.UNREADABLE:
+            on_main(self.hint.set_label, "One of the pictures could not be read")
+            return
         on_main(self.rendered, images)
 
     def rendered(self, images):

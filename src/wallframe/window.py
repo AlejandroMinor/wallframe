@@ -15,7 +15,7 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("Pango", "1.0")
 from gi.repository import Gdk, Gio, GLib, GObject, Gtk, Pango  # noqa: E402
 
-from . import calibration, config, gallery, render, upscalers  # noqa: E402
+from . import calibration, config, gallery, paths, render, upscalers  # noqa: E402
 from .commands import Cancel, Cancelled  # noqa: E402
 from .framing import BLUR_RANGE, FILLS, MAX_ZOOM  # noqa: E402
 from . import aifill  # noqa: E402
@@ -306,7 +306,7 @@ def card_preview(path):
 def _card_preview(path, _inode, _date, _size):
     try:
         small = render.thumbnail(path, max(LAYOUT_CARD))  # RGBA
-    except OSError:
+    except render.UNREADABLE:
         return None
     small.thumbnail(LAYOUT_CARD)
     return Gdk.MemoryTexture.new(small.width, small.height, Gdk.MemoryFormat.R8G8B8A8,
@@ -449,8 +449,11 @@ class Window(Gtk.ApplicationWindow):
         # the smallest one, so it fits wherever it lands.
         opens_on = next((m for m in monitors if m.name == focused),
                         min(monitors, key=lambda m: m.width * m.height))
-        self.set_default_size(int(min(1200, opens_on.width * 0.8)),
-                              int(min(850, opens_on.height * 0.7)))
+        # In logical pixels when the desktop says them: on a scaled monitor the physical
+        # ones would leave the window taller than the screen.
+        width, height = (self.positions.get(opens_on.name)
+                         or (0, 0, opens_on.width, opens_on.height))[2:]
+        self.set_default_size(int(min(1200, width * 0.8)), int(min(850, height * 0.7)))
 
         self.area = Gtk.DrawingArea(hexpand=True, vexpand=True)
         self.area.set_draw_func(self.draw)
@@ -666,19 +669,23 @@ class Window(Gtk.ApplicationWindow):
         self.transition_grid = grid
         self.transition_missing = Gtk.Label(
             xalign=0, wrap=True, max_width_chars=60,
-            label="Not available: transitions need awww or swww.")
+            label="Windows has no transitions." if sys.platform == "win32"
+            else "Not available: transitions need awww or swww.")
         self.transition_missing.add_css_class("dim-label")
         self.transition_row = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         self.transition_row.append(grid)
         self.transition_row.append(self.transition_missing)
 
         title = Gtk.Label(label="Run after the wallpaper changes", xalign=0, margin_top=8)
-        self.post_command = Gtk.Entry(placeholder_text='wallust run "$wallpaper"',
+        wallpaper, changed = (("%wallpaper%", "%WALLFRAME_MONITORS%")  # as cmd.exe writes them
+                              if sys.platform == "win32"
+                              else ("$wallpaper", "$WALLFRAME_MONITORS"))
+        self.post_command = Gtk.Entry(placeholder_text=f'wallust run "{wallpaper}"',
                                       width_chars=48, hexpand=True)
         self.post_command.connect("activate", lambda _e: self.save_settings())
         hint = Gtk.Label(xalign=0, wrap=True, max_width_chars=60,
                          label="A shell command, run once after each Apply or layout switch. "
-                               "$wallpaper is the picture; $WALLFRAME_MONITORS lists the "
+                               f"{wallpaper} is the picture; {changed} lists the "
                                "monitors that changed. Leave it empty to run nothing.")
         hint.add_css_class("dim-label")
         save = Gtk.Button(label="Save", halign=Gtk.Align.END)
@@ -1462,7 +1469,7 @@ class Window(Gtk.ApplicationWindow):
         thumb = next((m.thumb for m in self.monitors if m.image == saved["source"]), None)
         try:
             span.take(saved, thumb)
-        except OSError:
+        except render.UNREADABLE:
             return  # its picture is gone; the monitors that could, switched
         span.mark_applied()
         self.remember_span()
@@ -1592,12 +1599,18 @@ class Window(Gtk.ApplicationWindow):
         self.flash("Prompt copied · paste it in your external AI, with the picture and its mask",
                    "success")
 
+    def start_folder(self):
+        """Where a file dialog starts: beside the picture shown, or in the wallpaper folder
+        when that is one of wallframe's own, a crop or a blank monitor's."""
+        folder = os.path.dirname(self.monitor.original)
+        own = paths.same_file(folder, self.monitors[0].store.directory)
+        return self.wallpaper_folder() if own else folder
+
     def ask_export(self, title, name, write, done):
         """Asks where to save a PNG, runs write(path) off the main thread, and says how it
         went: done(path) is the message when it worked."""
         dialog = Gtk.FileDialog(title=title, initial_name=name, modal=False,
-                                initial_folder=Gio.File.new_for_path(
-                                    os.path.dirname(self.monitor.original)))
+                                initial_folder=Gio.File.new_for_path(self.start_folder()))
 
         def chosen(dialog, result):
             try:
@@ -1610,7 +1623,7 @@ class Window(Gtk.ApplicationWindow):
             def work():
                 try:
                     write(path)
-                except (OSError, ValueError) as error:
+                except render.UNREADABLE as error:
                     return error
 
             def then(error):
@@ -2276,8 +2289,7 @@ class Window(Gtk.ApplicationWindow):
         filters, images = image_filters()
         dialog = Gtk.FileDialog(title=f"Open an image for {self.monitor.name}",
                                 filters=filters, default_filter=images, modal=False,
-                                initial_folder=Gio.File.new_for_path(
-                                    os.path.dirname(self.monitor.original)))
+                                initial_folder=Gio.File.new_for_path(self.start_folder()))
         monitor = self.monitor  # the one it was opened for, even if Tab moves on
 
         def chosen(dialog, result):
@@ -2608,11 +2620,16 @@ class Window(Gtk.ApplicationWindow):
                             None, None)
                 except OSError as error:
                     return (monitor, snapshot, None, error, None)
-                except Exception as error:  # noqa: BLE001 - here it would stop Apply for good
-                    return (monitor, snapshot, None, OSError(None, str(error)), None)
+
+            def guarded(job):
+                """one(job); anything else raised here would leave Apply on its spinner."""
+                try:
+                    return one(job)
+                except Exception as error:  # noqa: BLE001 - told like any other failure
+                    return (job[0], None, None, OSError(None, str(error)), None)
 
             with ThreadPoolExecutor(max_workers=max(1, min(len(jobs), APPLY_THREADS))) as pool:
-                return list(pool.map(one, jobs))  # in the order of the jobs
+                return list(pool.map(guarded, jobs))  # in the order of the jobs
 
         def finish(results):
             failed, changed = [], []
@@ -2698,8 +2715,7 @@ class Window(Gtk.ApplicationWindow):
             if monitor.touched or span_edited or not render.is_still_image(output.image):
                 if ask_postponed or (monitor.name, output.image) not in self.postponed:
                     conflicts.append((monitor, output))
-            else:
-                monitor.load(output)
+            elif self.reload(monitor, output):
                 reloaded.append(monitor)
         if reloaded and self.span and not span_edited:
             self.span.follow(reloaded[0])  # the span shows what the monitors do now
@@ -2708,6 +2724,16 @@ class Window(Gtk.ApplicationWindow):
             self.flash(f"New wallpaper loaded on {', '.join(m.name for m in reloaded)}",
                        "success")
         self.ask_next(conflicts, then)
+
+    def reload(self, monitor, output):
+        """Starts editing what the monitor shows now; False when it cannot be read, as a
+        picture set elsewhere may be broken past its header: the editor goes on as it was."""
+        try:
+            monitor.load(output)
+        except render.UNREADABLE as error:
+            self.flash(f"Cannot read the new wallpaper of {monitor.name}: {error}", "error")
+            return False
+        return True
 
     def ask_next(self, conflicts, then):
         """Asks about each conflict in turn, then runs `then`."""
@@ -2739,7 +2765,7 @@ class Window(Gtk.ApplicationWindow):
             if choice == 1:
                 monitor.ignored = output.image
             elif loadable:
-                monitor.load(output)
+                self.reload(monitor, output)
             else:
                 monitor.ignored = output.image
                 monitor.discard_edit()

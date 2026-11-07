@@ -481,3 +481,14 @@ def test_the_span_exports_at_the_resolution_of_its_densest_monitor(tmp_path):
     framing = whole.export_framing()
     assert (framing.monitor_w, framing.monitor_h) == (whole.width * 2, whole.height * 2)
     assert monitors[0].export_framing() is monitors[0].framing
+
+
+def test_a_saved_span_with_a_broken_picture_falls_back_to_the_monitors(tmp_path, monkeypatch):
+    monitors, positions = two_monitors(tmp_path)
+    saved = span.make(monitors, positions).snapshot()
+
+    def broken(_path):
+        raise SyntaxError("broken PNG file")
+
+    monkeypatch.setattr(span, "preview", broken)
+    assert span.make(monitors, positions, saved).image == monitors[0].image

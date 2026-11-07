@@ -291,11 +291,11 @@ class Monitor(Picture):
 
         Quick enough to ask for every layout each time the list is drawn.
         """
-        if entry["source"] != self.applied_image:
+        if entry.get("source") != self.applied_image:
             return False
         try:
             return self.saved_framing(entry).key() == self.applied
-        except OSError:
+        except (KeyError, *render.UNREADABLE):
             return False
 
     def apply(self, daemon):
@@ -329,7 +329,7 @@ class Monitor(Picture):
         """The quick half of apply(): sets `path`, a crop of what is edited now, and
         remembers it. Raises OSError when the daemon refuses it."""
         daemon.set_image(self.name, path)
+        self.shown, self.ignored = path, None  # it does, even if saving that fails next
         self.store.remember(self.name, path, self.image, self.framing, self.original)
         self.store.remove_old_crops(self.name, keep=path)
-        self.shown, self.ignored = path, None
         self.mark_applied()

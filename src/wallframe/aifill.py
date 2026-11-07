@@ -16,9 +16,10 @@ LARGE = 0.5     # the share of empty space past which the AI invents more than i
 def share(picture, color):
     """The fraction of `picture`'s pixels near `color` (an RGB image, small, and a "#rrggbb")."""
     wanted = tuple(int(color[i:i + 2], 16) for i in (1, 3, 5))
-    pixels = list(picture.convert("RGB").getdata())
+    data = picture.convert("RGB").tobytes()
+    pixels = zip(data[0::3], data[1::3], data[2::3])
     near = sum(1 for p in pixels if math.dist(p, wanted) < CLOSE)
-    return near / len(pixels)
+    return near / (len(data) // 3)
 
 
 def least_present(picture):

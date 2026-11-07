@@ -407,3 +407,30 @@ def test_what_pillow_raises_on_a_bad_picture_reads_as_a_failure(tmp_path, monkey
     monkeypatch.setattr(render, "image_size", fails)
     with pytest.raises(OSError, match="not an image"):
         read_image(path)
+
+
+def test_a_crop_on_the_screen_counts_even_if_saving_it_fails(tmp_path, monkeypatch):
+    """The monitor shows it: wallframe must not ask about it as a wallpaper set elsewhere."""
+    m = portrait_monitor(tmp_path)
+    daemon = FakeDaemon()
+    m.edit("mirror")
+
+    def full(*_args):
+        raise OSError(None, "disk full")
+
+    monkeypatch.setattr(m.store, "remember", full)
+    with pytest.raises(OSError):
+        m.apply(daemon)
+    assert not m.changed(daemon.shown["DP-1"])
+    assert m.touched                                         # and it stays to apply again
+
+
+def test_a_layout_whose_picture_went_bad_is_just_not_what_is_shown(tmp_path, monkeypatch):
+    m = portrait_monitor(tmp_path)
+    entry = m.snapshot()
+
+    def broken(_path):
+        raise SyntaxError("broken PNG file")
+
+    monkeypatch.setattr(render, "image_size", broken)
+    assert not m.shows(entry)
