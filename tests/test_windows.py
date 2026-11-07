@@ -1,12 +1,18 @@
 """Tests for the Windows backend, on any system: a stand-in answers for Windows (win32.py)."""
 
 import pytest
+from PIL import Image
 
 from wallframe import windows
 from wallframe.daemons import Output
 from wallframe.windows import Desktop, Wallpaper, desktop_places, names, registry_key
 
 GUID = "{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}"
+
+
+@pytest.fixture(autouse=True)
+def blanks_stay_out_of_your_folders(tmp_path, monkeypatch):
+    monkeypatch.setattr(windows, "DATA_DIR", str(tmp_path / "data"))
 
 
 def device(code, uid):
@@ -106,13 +112,21 @@ def test_no_monitors_have_no_places():
     assert desktop_places([], {}) == {}
 
 
-def test_outputs_are_the_monitors_showing_a_picture_in_physical_pixels(tmp_path):
+def test_outputs_are_the_monitors_in_physical_pixels(tmp_path):
     picture = tmp_path / "sea.jpg"
     picture.write_bytes(b"")
-    system = FakeWindows([(DELL, (0, 0, 3840, 2160), 1.5), (LG, (3840, 0, 1920, 1080), 1.0),
-                          (SIDE, (5760, 0, 1080, 1920), 1.0)],
-                         {DELL: str(picture), LG: "", SIDE: str(tmp_path / "gone.jpg")})
+    system = FakeWindows([(DELL, (0, 0, 3840, 2160), 1.5)], {DELL: str(picture)})
     assert Wallpaper(system).outputs() == [Output("DEL40F3", 3840, 2160, str(picture))]
+
+
+def test_a_monitor_with_a_color_or_a_picture_that_is_gone_can_still_be_framed(tmp_path):
+    system = FakeWindows([(LG, (0, 0, 1920, 1080), 1.0), (SIDE, (1920, 0, 1080, 1920), 1.0)],
+                         {LG: "", SIDE: str(tmp_path / "gone.jpg")})
+    first, second = Wallpaper(system).outputs()
+    with Image.open(first.image) as picture:
+        assert picture.size == (1920, 1080)
+    with Image.open(second.image) as picture:
+        assert picture.size == (1080, 1920)
 
 
 def test_a_monitor_the_shell_does_not_know_is_left_out(tmp_path):
@@ -156,9 +170,14 @@ def test_sizes_come_from_the_edids_windows_keeps():
     assert Desktop(system).sizes() == {"DEL40F3": (527, 296)}
 
 
-def test_without_a_picture_on_any_monitor_there_is_no_wallpaper_to_frame():
+def test_wallframe_opens_without_a_picture_on_any_monitor():
+    """A color was enough to stop it at "No image wallpaper found."."""
     system = FakeWindows([(DELL, (0, 0, 1920, 1080), 1.0)], {DELL: ""})
-    assert Desktop(system).wallpaper() is None
+    assert Desktop(system).wallpaper() is not None
+
+
+def test_there_is_no_wallpaper_to_frame_without_monitors():
+    assert Desktop(FakeWindows([])).wallpaper() is None
 
 
 @pytest.mark.parametrize("value, css", [

@@ -20,7 +20,7 @@ jobs:
       run:
         shell: msys2 {0}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: msys2/setup-msys2@v2
         with:
@@ -85,7 +85,7 @@ jobs:
           if (Test-Path "$installed\wallframe.exe") { throw "the uninstaller left wallframe.exe" }
 
       - name: Keep the files
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wallframe-windows
           path: |

@@ -12,7 +12,7 @@ jobs:
       run:
         shell: msys2 {0}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: msys2/setup-msys2@v2
         with:
@@ -66,7 +66,7 @@ jobs:
 
       - name: Keep the screenshot
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wallframe-on-windows
           path: screenshot.png
@@ -94,6 +94,28 @@ jobs:
           assert os.path.normcase(shown) == os.path.normcase(crop), shown
           shell.set_image(before.name, before.image)  # as it was
           print("restored:", system.wallpaper(shell.paths[before.name]))
+          EOF
+
+      # With a solid color there is no picture, and wallframe must open all the same.
+      - name: Open on a solid color
+        env:
+          PYTHONPATH: src
+        run: |
+          python - <<'EOF'
+          import os
+          from wallframe import windows
+          desktop = windows.Desktop()
+          system = desktop.system
+          shell = windows.Wallpaper(system)
+          before = shell.outputs()[0]
+          path = shell.paths[before.name]
+          system.set_wallpaper(path, "")
+          print("shown:", repr(system.wallpaper(path)))
+          after = shell.outputs()[0]
+          print("output:", after)
+          assert os.path.basename(after.image).startswith("blank-"), after
+          assert desktop.wallpaper() is not None
+          system.set_wallpaper(path, before.image)  # as it was
           EOF
 
       # Verbose, so a test that hangs is the last one named; past a minute, it also

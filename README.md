@@ -71,6 +71,7 @@ What is different on Windows:
 - Windows has no transitions, so the settings are greyed out, as on Plasma.
 - `post_command` runs in `cmd.exe`, so the variables are written `%wallpaper%` and `%WALLFRAME_MONITORS%`.
 - The settings are in `%APPDATA%\wallframe\config.ini`, and the crops and thumbnails in `%LOCALAPPDATA%\wallframe`.
+- A monitor showing a color, or a picture that is gone, opens with a black picture: choose one and frame it.
 - If the fit in Windows' own settings is **Span**, Apply changes it to **Fill**: Span shows one picture across every monitor, and would hide each monitor's own.
 - With more than one virtual desktop, Windows 11 may keep one wallpaper per virtual desktop instead of one per monitor.
 

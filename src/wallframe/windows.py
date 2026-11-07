@@ -18,9 +18,12 @@ import re
 import sys
 from collections import namedtuple
 
+from PIL import Image
+
 from . import edid, span
 from .compositors import CompositorInfo
 from .daemons import Output
+from .state import DATA_DIR
 
 if sys.platform == "win32":
     from . import win32
@@ -88,6 +91,15 @@ def accent_color(value):
     return "rgb({}, {}, {})".format(value & 0xFF, value >> 8 & 0xFF, value >> 16 & 0xFF)
 
 
+def blank(width, height):
+    """A black picture of that size, made once, to frame a monitor that shows none."""
+    path = os.path.join(DATA_DIR, f"blank-{width}x{height}.png")
+    if not os.path.exists(path):
+        os.makedirs(DATA_DIR, exist_ok=True)
+        Image.new("RGB", (width, height)).save(path)
+    return path
+
+
 class Wallpaper:
     """What daemons.Daemon offers (outputs, set_image), over the shell's wallpaper."""
 
@@ -96,10 +108,10 @@ class Wallpaper:
         self.paths = {}  # name -> device path, from the last outputs()
 
     def outputs(self):
-        """The monitors showing a picture, by name and in physical pixels.
+        """The monitors, by name and in physical pixels.
 
-        A monitor showing a color, or a picture that is no longer there, is left
-        out, as Plasma leaves out a slideshow: it has no picture to frame.
+        A monitor showing a color, or a picture that is no longer there, comes with a
+        blank one: on Windows anyone may start wallframe to set their first wallpaper.
         """
         screens = [Screen(*s) for s in self.system.screens()]
         named = names([s.path for s in screens])
@@ -111,8 +123,9 @@ class Wallpaper:
                 image = self.system.wallpaper(screen.path)
             except OSError:
                 continue
-            if image and os.path.isfile(image):
-                found.append(Output(name, screen.rect[2], screen.rect[3], image))
+            if not (image and os.path.isfile(image)):
+                image = blank(screen.rect[2], screen.rect[3])
+            found.append(Output(name, screen.rect[2], screen.rect[3], image))
         return found
 
     def set_image(self, output, path):
