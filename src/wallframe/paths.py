@@ -9,6 +9,16 @@ import os
 import sys
 
 
+def same_file(one, other):
+    """True when the two paths name one file, however they are written: Windows gives
+    a path back in its own spelling, which is not always the one it was handed."""
+    return one == other or bool(one and other) and _spelled(one) == _spelled(other)
+
+
+def _spelled(path):
+    return os.path.normcase(os.path.normpath(path))
+
+
 def _folder(variable, fallback):
     return os.environ.get(variable) or os.path.expanduser(fallback)
 

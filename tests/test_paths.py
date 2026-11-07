@@ -1,10 +1,24 @@
 """Tests for where the files go on each system: only environment variables are read."""
 
+import ntpath
 import os
 
 import pytest
 
 from wallframe import paths
+
+
+def test_two_spellings_of_a_windows_path_name_one_file(monkeypatch):
+    mine = r"C:\Users\Ana\AppData\Local/wallframe/DP-1-1.png"
+    with monkeypatch.context() as patched:
+        patched.setattr(paths.os, "path", ntpath)
+        assert paths.same_file(mine, r"c:\users\ana\appdata\local\wallframe\DP-1-1.png")
+        assert not paths.same_file(mine, r"C:\Users\Ana\Pictures\DP-1-1.png")
+
+
+def test_no_path_is_the_same_file_as_a_path():
+    assert not paths.same_file(None, "/wallpapers/new.jpg")
+    assert not paths.same_file("/wallpapers/new.jpg", "")
 
 
 @pytest.fixture

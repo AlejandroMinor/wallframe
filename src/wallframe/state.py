@@ -36,7 +36,7 @@ class Store:
         If the monitor shows wallframe's last crop, editing resumes from the original.
         """
         saved = self.load().get(monitor, {})
-        if saved.get("crop") == shown and os.path.exists(saved.get("source", "")):
+        if paths.same_file(saved.get("crop"), shown) and os.path.exists(saved.get("source", "")):
             return saved["source"], saved
         return shown, None
 

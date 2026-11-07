@@ -1,5 +1,6 @@
 """Tests for one monitor's edit and apply cycle, with a fake daemon."""
 
+import ntpath
 import os
 import time
 
@@ -7,7 +8,7 @@ import pytest
 from PIL import Image
 
 from wallframe.daemons import Output
-from wallframe import gallery, render
+from wallframe import gallery, paths, render
 from wallframe.monitor import PREVIEW_MAX, Monitor, _previews, has_preview, preview
 from wallframe.state import Store
 
@@ -97,6 +98,16 @@ def test_own_apply_is_not_a_change(tmp_path):
     m.edit("mirror")
     m.apply(daemon)
     assert not m.changed(daemon.shown["DP-1"])
+
+
+def test_own_crop_as_windows_spells_it_is_not_a_change(tmp_path, monkeypatch):
+    """Each Apply asked about every monitor: "has a new wallpaper", the crop just set."""
+    m = portrait_monitor(tmp_path)
+    m.shown = r"C:\Users\Ana\AppData\Local/wallframe/DP-1-1.png"
+    with monkeypatch.context() as patched:
+        patched.setattr(paths.os, "path", ntpath)
+        assert not m.changed(r"C:\Users\Ana\AppData\Local\wallframe\DP-1-1.png")
+        assert m.changed(r"C:\Users\Ana\Pictures\new.png")
 
 
 def test_load_switches_to_the_new_wallpaper(tmp_path):

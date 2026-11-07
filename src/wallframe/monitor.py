@@ -5,7 +5,7 @@ from concurrent.futures import Future
 
 from PIL import Image
 
-from . import gallery, render
+from . import gallery, paths, render
 from .framing import Framing
 
 PREVIEW_MAX = 2048  # longest side of the preview copy; the crop uses the original
@@ -221,7 +221,7 @@ class Monitor(Picture):
 
     def changed(self, shown):
         """True when the monitor now shows `shown`, set outside wallframe and not ignored."""
-        return shown not in (self.shown, self.ignored)
+        return not (paths.same_file(shown, self.shown) or paths.same_file(shown, self.ignored))
 
     def copy_from(self, other, everything=True):
         """Takes `other`'s picture and framing, or with everything=False only its fill.

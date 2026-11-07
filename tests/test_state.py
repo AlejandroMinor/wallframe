@@ -1,9 +1,11 @@
 """Tests for the saved state: always in a temporary folder, never in ~/.local/share."""
 
+import ntpath
 import os
 
 import pytest
 
+from wallframe import paths
 from wallframe.framing import Framing
 from wallframe.state import Store
 
@@ -35,6 +37,19 @@ def test_remember_then_resume_from_the_original(tmp_path):
     restored = Framing(1080, 1920, 3840, 2160)
     restored.restore(saved)
     assert restored.key() == f.key()
+
+
+def test_resumes_from_the_crop_as_windows_spells_it(tmp_path, monkeypatch):
+    store = Store(tmp_path)
+    source = tmp_path / "original.jpg"
+    source.write_bytes(b"")
+    crop = r"C:\Users\Ana\AppData\Local/wallframe/DP-1-1.png"
+    store.remember("DP-1", crop, str(source), edited_framing())
+    with monkeypatch.context() as patched:
+        patched.setattr(paths.os, "path", ntpath)
+        image, saved = store.resume("DP-1", crop.replace("/", "\\"))
+    assert image == str(source)
+    assert saved is not None
 
 
 def test_no_resume_when_the_monitor_shows_something_else(tmp_path):
