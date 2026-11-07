@@ -48,16 +48,29 @@ jobs:
           EOF
 
       # The whole app, as a user starts it: it should open and keep running.
-      # timeout stops it after 20 seconds (status 124); any other end is a crash.
+      # timeout stops it after 25 seconds (status 124); any other end is a crash.
+      # A screenshot on the way shows the window, among the job's artifacts.
       - name: Open wallframe
         run: |
+          timeout 25 python -u wallframe > wallframe.log 2>&1 &
+          app=$!
+          sleep 15
+          powershell.exe -NoProfile -Command 'Add-Type -AssemblyName System.Windows.Forms, System.Drawing; $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds; $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height; [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size); $bmp.Save("screenshot.png")' || true
           status=0
-          timeout 20 python -u wallframe > wallframe.log 2>&1 || status=$?
+          wait $app || status=$?
           cat wallframe.log
           if [ "$status" != 124 ] || grep -q Traceback wallframe.log; then
             echo "wallframe did not keep running (status $status)"
             exit 1
           fi
+
+      - name: Keep the screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wallframe-on-windows
+          path: screenshot.png
+          if-no-files-found: warn
 
       # What Apply does at its end: set a crop on the monitor, then read it back.
       - name: Set a wallpaper and read it back
