@@ -49,6 +49,29 @@ Optional:
 - [Upscayl](https://github.com/upscayl/upscayl): the **Upscale** panel enlarges low-resolution images ×2, ×3 or ×4 before cropping, on one monitor or all of them at once. You can compare the result with the original at real size, and go back to the original at any time. It needs a Vulkan GPU, and the native package: on Arch, `upscayl-bin` from the AUR; elsewhere, the official .deb or .rpm. The Flatpak and AppImage do not work.
 - `libnotify`: errors appear as notifications, which helps when you start wallframe without a terminal. On Hyprland, errors appear as Hyprland notifications even without it.
 
+### Windows (experimental)
+
+Windows 10 and 11 work in progress: wallframe sets each monitor's own wallpaper through Windows itself, without awww. It has not been tried on a real Windows desk yet, so expect rough edges, and say what you find in an issue.
+
+There is no installer yet. To run it from source, install [MSYS2](https://www.msys2.org), open its **UCRT64** shell and install GTK and Python there:
+
+```bash
+pacman -S mingw-w64-ucrt-x86_64-gtk4 mingw-w64-ucrt-x86_64-python-gobject \
+          mingw-w64-ucrt-x86_64-python-cairo mingw-w64-ucrt-x86_64-python-pillow git
+git clone https://github.com/AlejandroMinor/wallframe.git
+cd wallframe
+python wallframe
+```
+
+What is different on Windows:
+
+- Each monitor is named by the model code Windows gives it, like `DEL40F3`; a second monitor of the same model is `DEL40F3-2`. The model, like DELL U2720Q, and the real size come from the monitor itself, so the span works as on Linux.
+- Windows has no transitions, so the settings are greyed out, as on Plasma.
+- `post_command` runs in `cmd.exe`, so the variables are written `%wallpaper%` and `%WALLFRAME_MONITORS%`.
+- The settings are in `%APPDATA%\wallframe\config.ini`, and the crops and thumbnails in `%LOCALAPPDATA%\wallframe`.
+- If the fit in Windows' own settings is **Span**, Apply changes it to **Fill**: Span shows one picture across every monitor, and would hide each monitor's own.
+- With more than one virtual desktop, Windows 11 may keep one wallpaper per virtual desktop instead of one per monitor.
+
 ## Install
 
 Clone the repository and run it. There is nothing to build:
