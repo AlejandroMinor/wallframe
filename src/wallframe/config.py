@@ -29,7 +29,7 @@ def _read(path):
     """The file's parser; empty when the file is missing or broken."""
     parser = configparser.ConfigParser(interpolation=None)
     try:
-        parser.read(path or CONFIG_FILE, encoding="utf-8")
+        parser.read(path or CONFIG_FILE, encoding="utf-8-sig")  # Windows editors may add a BOM
     except (configparser.Error, UnicodeDecodeError):
         return configparser.ConfigParser(interpolation=None)
     return parser

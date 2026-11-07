@@ -14,6 +14,7 @@ pytest.importorskip("gi")  # only the window needs GTK
 from PIL import Image  # noqa: E402
 
 from wallframe import config, gallery, span, upscalers  # noqa: E402
+from wallframe.__main__ import open_monitor  # noqa: E402
 from wallframe.commands import Cancel  # noqa: E402
 from wallframe.daemons import Daemon, Output  # noqa: E402
 from wallframe.layouts import Layouts  # noqa: E402
@@ -987,3 +988,9 @@ def test_resting_on_a_picture_reads_it_ahead(tmp_path):
     assert has_preview(beach)                            # a click now opens it at once
     Window.hover_gallery(window, None)                  # the pointer left the panel
     assert window.gallery_hovered is None
+
+
+def test_a_monitor_whose_picture_cannot_be_read_stays_out_and_the_others_open(tmp_path):
+    broken = tmp_path / "broken.png"
+    broken.write_bytes(b"not a picture")
+    assert open_monitor(Output("DP-1", 90, 160, str(broken)), Store(tmp_path), "") is None

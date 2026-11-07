@@ -98,11 +98,13 @@ def read_image(path):
     """
     try:
         size = render.image_size(path)
-    except OSError as error:
+        still = render.is_still_image(path)
+        picture = preview(path) if still else None
+    except render.UNREADABLE as error:
         raise OSError(None, "not an image wallframe can read") from error
-    if not render.is_still_image(path):
+    if not still:
         raise OSError(None, "animated images and videos cannot be framed")
-    return size, preview(path)
+    return size, picture
 
 
 class Picture:

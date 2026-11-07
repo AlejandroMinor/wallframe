@@ -9,7 +9,8 @@ from PIL import Image
 
 from wallframe.daemons import Output
 from wallframe import gallery, paths, render
-from wallframe.monitor import PREVIEW_MAX, Monitor, _previews, has_preview, preview
+from wallframe.monitor import (PREVIEW_MAX, Monitor, _previews, has_preview, preview,
+                               read_image)
 from wallframe.state import Store
 
 
@@ -392,3 +393,17 @@ def test_a_small_picture_is_not_kept_on_disk(tmp_path):
     Image.new("RGB", (400, 200)).save(small)
     preview(str(small))
     assert not kept_on_disk(small, wait=0.3)             # read as quickly as the copy
+
+
+@pytest.mark.parametrize("failure", [SyntaxError("broken PNG file"),
+                                     Image.DecompressionBombError("too large")])
+def test_what_pillow_raises_on_a_bad_picture_reads_as_a_failure(tmp_path, monkeypatch, failure):
+    """Neither is an OSError: on its thread, "Opening…" stayed for good."""
+    path = other_wallpaper(tmp_path)
+
+    def fails(*_args):
+        raise failure
+
+    monkeypatch.setattr(render, "image_size", fails)
+    with pytest.raises(OSError, match="not an image"):
+        read_image(path)

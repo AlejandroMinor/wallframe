@@ -146,3 +146,10 @@ def test_a_picture_read_once_crops_like_its_file(tmp_path):
         assert render.compose(loaded, framing).tobytes() == from_file.tobytes()
     assert len(loaded._turned) == 1                     # one mirrored copy for both monitors
 
+
+
+def test_a_picture_too_large_or_broken_is_not_still(tmp_path, monkeypatch):
+    path = tmp_path / "large.png"
+    Image.new("RGB", (40, 40)).save(path)
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 10)
+    assert not render.is_still_image(str(path))

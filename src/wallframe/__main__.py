@@ -11,6 +11,15 @@ from .monitor import Monitor
 from .state import Store
 
 
+def open_monitor(output, store, model):
+    """The monitor, or None when its picture looks fine but cannot be read: the others
+    still open."""
+    try:
+        return Monitor(output, store, model)
+    except render.UNREADABLE:
+        return None
+
+
 def main():
     desktop = desktops.detect()
     if desktop.name == "windows" and desktop.already_open():
@@ -26,8 +35,8 @@ def main():
     # Each monitor reads its picture for the preview, up to a second for a big one: all at
     # once, and one read for monitors that show the same picture.
     with ThreadPoolExecutor() as pool:
-        monitors = list(pool.map(lambda o: Monitor(o, store, info.models.get(o.name, "")),
-                                 outputs))
+        monitors = [m for m in pool.map(
+            lambda o: open_monitor(o, store, info.models.get(o.name, "")), outputs) if m]
     if not monitors:
         notify("Animated and video wallpapers cannot be adjusted.")
         return 1

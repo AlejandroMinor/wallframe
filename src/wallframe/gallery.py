@@ -10,7 +10,7 @@ import time
 
 from PIL import Image
 
-from . import paths
+from . import paths, render
 
 CACHE_DIR = os.path.join(paths.cache_dir(), "thumbnails")
 THUMB_SIZE = (240, 150)  # the most a thumbnail takes, keeping the picture's shape
@@ -89,7 +89,7 @@ def thumbnail(path, cache=None):
             img.draft("RGB", THUMB_SIZE)  # JPEGs decode at a fraction of their size: fast
             img.thumbnail(THUMB_SIZE)
             small = img.convert("RGBA" if img.mode in ("RGBA", "LA", "P") else "RGB")
-    except (OSError, ValueError, Image.DecompressionBombError) as error:
+    except render.UNREADABLE as error:
         raise OSError(None, f"cannot read {os.path.basename(path)}") from error
     temporary = f"{thumb}.{threading.get_ident()}.tmp"  # another thread may be reading it
     small.save(temporary, "PNG")

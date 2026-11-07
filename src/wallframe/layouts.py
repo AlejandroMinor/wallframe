@@ -22,6 +22,8 @@ class Layout:
 
     def __init__(self, path, data):
         self.path, self.name, self.monitors = path, data["name"], data["monitors"]
+        if not all(isinstance(entry, dict) for entry in self.monitors.values()):
+            raise ValueError(f"{path}: a monitor is not an entry")
         self.span = data.get("span")  # a Span.snapshot(), or None
 
     @property
@@ -58,7 +60,7 @@ class Layouts:
                 try:
                     with open(path, encoding="utf-8") as f:
                         layouts.append(Layout(path, json.load(f)))
-                except (OSError, ValueError, KeyError):
+                except (OSError, ValueError, KeyError, TypeError, AttributeError):
                     continue
         return layouts
 

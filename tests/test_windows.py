@@ -113,8 +113,8 @@ def test_no_monitors_have_no_places():
 
 
 def test_outputs_are_the_monitors_in_physical_pixels(tmp_path):
-    picture = tmp_path / "sea.jpg"
-    picture.write_bytes(b"")
+    picture = tmp_path / "sea.png"
+    Image.new("RGB", (40, 30)).save(picture)
     system = FakeWindows([(DELL, (0, 0, 3840, 2160), 1.5)], {DELL: str(picture)})
     assert Wallpaper(system).outputs() == [Output("DEL40F3", 3840, 2160, str(picture))]
 
@@ -193,3 +193,10 @@ def test_windows_is_only_reachable_on_windows(monkeypatch):
     assert not Desktop(FakeWindows([])).reachable()
     monkeypatch.setattr(windows.sys, "platform", "win32")
     assert Desktop(FakeWindows([])).reachable()
+
+
+def test_a_broken_picture_is_framed_as_no_picture(tmp_path):
+    broken = tmp_path / "broken.png"
+    broken.write_bytes(b"not a picture")
+    system = FakeWindows([(DELL, (0, 0, 640, 480), 1.0)], {DELL: str(broken)})
+    assert Wallpaper(system).outputs()[0].image.endswith("blank-640x480.png")

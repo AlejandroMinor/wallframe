@@ -2608,6 +2608,8 @@ class Window(Gtk.ApplicationWindow):
                             None, None)
                 except OSError as error:
                     return (monitor, snapshot, None, error, None)
+                except Exception as error:  # noqa: BLE001 - here it would stop Apply for good
+                    return (monitor, snapshot, None, OSError(None, str(error)), None)
 
             with ThreadPoolExecutor(max_workers=max(1, min(len(jobs), APPLY_THREADS))) as pool:
                 return list(pool.map(one, jobs))  # in the order of the jobs

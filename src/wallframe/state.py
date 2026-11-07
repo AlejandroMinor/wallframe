@@ -23,12 +23,15 @@ class Store:
         self.state_file = os.path.join(directory, "state.json")
 
     def load(self):
-        """The saved state; empty when missing or unreadable."""
+        """The saved state; empty when missing or unreadable, without what is not an entry."""
         try:
             with open(self.state_file, encoding="utf-8") as f:
-                return json.load(f)
+                state = json.load(f)
         except (OSError, ValueError):
             return {}
+        if not isinstance(state, dict):
+            return {}
+        return {name: entry for name, entry in state.items() if isinstance(entry, dict)}
 
     def resume(self, monitor, shown):
         """Returns (image to edit, saved framing or None).

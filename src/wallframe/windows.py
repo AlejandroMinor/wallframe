@@ -20,7 +20,7 @@ from collections import namedtuple
 
 from PIL import Image
 
-from . import edid, span
+from . import edid, render, span
 from .compositors import CompositorInfo
 from .daemons import Output
 from .state import DATA_DIR
@@ -110,7 +110,7 @@ class Wallpaper:
     def outputs(self):
         """The monitors, by name and in physical pixels.
 
-        A monitor showing a color, or a picture that is no longer there, comes with a
+        A monitor showing a color, or a picture that is gone or broken, comes with a
         blank one: on Windows anyone may start wallframe to set their first wallpaper.
         """
         screens = [Screen(*s) for s in self.system.screens()]
@@ -123,7 +123,7 @@ class Wallpaper:
                 image = self.system.wallpaper(screen.path)
             except OSError:
                 continue
-            if not (image and os.path.isfile(image)):
+            if not (image and os.path.isfile(image) and render.is_still_image(image)):
                 image = blank(screen.rect[2], screen.rect[3])
             found.append(Output(name, screen.rect[2], screen.rect[3], image))
         return found

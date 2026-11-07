@@ -121,6 +121,8 @@ def test_broken_files_are_skipped(tmp_path):
     folder.mkdir()
     (folder / "1.json").write_text("{ not json")
     (folder / "2.json").write_text('{"monitors": {}}')
+    (folder / "3.json").write_text("[]")
+    (folder / "4.json").write_text('{"name": "x", "monitors": {"DP-1": 4}}')
     assert Layouts(folder).all() == []
     assert Layouts(tmp_path / "nowhere").all() == []
 

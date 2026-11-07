@@ -2,6 +2,10 @@ import threading
 
 from PIL import Image, ImageFilter
 
+# What reading a picture may raise: Pillow says a broken PNG with SyntaxError, and refuses
+# one too large for memory with an error of its own, neither of them an OSError.
+UNREADABLE = (OSError, ValueError, SyntaxError, Image.DecompressionBombError)
+
 # Pillow rotates counter-clockwise; Framing.rotation is clockwise.
 _ROTATIONS = {90: Image.ROTATE_270, 180: Image.ROTATE_180, 270: Image.ROTATE_90}
 # A strong blur runs on a copy up to this many times smaller, then is scaled
@@ -25,7 +29,7 @@ def is_still_image(path):
     try:
         with Image.open(path) as img:
             return not getattr(img, "is_animated", False)
-    except OSError:
+    except UNREADABLE:
         return False
 
 

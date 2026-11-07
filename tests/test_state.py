@@ -119,3 +119,12 @@ def test_a_failed_save_keeps_the_previous_state(tmp_path, monkeypatch):
         store.remember("DP-2", "b.png", "b.jpg", edited_framing())
     assert (tmp_path / "state.json").read_text() == before   # DP-1 is still remembered
     assert sorted(p.name for p in tmp_path.iterdir()) == ["state.json"]   # no leftover
+
+
+@pytest.mark.parametrize("text", ["[1, 2]", "null", "3", '{"DP-1": 3}'])
+def test_a_state_that_is_not_entries_is_empty(tmp_path, text):
+    store = Store(tmp_path)
+    (tmp_path / "state.json").write_text(text, encoding="utf-8")
+    assert store.load() == {}
+    assert store.resume("DP-1", "/crop.png") == ("/crop.png", None)
+    assert store.images_in_use() == set()
