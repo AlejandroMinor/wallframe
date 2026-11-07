@@ -1,0 +1,101 @@
+name: Package for Windows
+
+# A tag like v1.2.3 publishes a release; a change to the packaging only tries it.
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+    paths:
+      - packaging/windows/**
+      - .github/workflows/package-windows.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-gtk4
+            mingw-w64-ucrt-x86_64-python-gobject
+            mingw-w64-ucrt-x86_64-python-cairo
+            mingw-w64-ucrt-x86_64-python-pillow
+            mingw-w64-ucrt-x86_64-python-pytest
+
+      - name: Tests
+        timeout-minutes: 15
+        env:
+          PYTHONPATH: src
+        run: python -m pytest -q -o faulthandler_timeout=60
+
+      - name: Name the version
+        id: version
+        run: |
+          case "$GITHUB_REF" in
+            refs/tags/v*) echo "number=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT" ;;
+            *) echo "number=0.0.0" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Build the package
+        run: bash packaging/windows/build.sh
+
+      # From here on, as a user runs it: no MSYS2 in the PATH, and none of its DLLs.
+      - name: Open the package
+        shell: pwsh
+        run: packaging/windows/smoke.ps1 dist/wallframe
+
+      - name: Make the portable zip
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.number }}
+        run: Compress-Archive -Path dist/wallframe -DestinationPath "dist/wallframe-$env:VERSION-portable.zip"
+
+      - name: Make the installer
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.number }}
+        run: |
+          $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\iscc.exe"
+          if (-not (Test-Path $compiler)) { choco install innosetup -y --no-progress }
+          & $compiler "/DAppVersion=$env:VERSION" packaging\windows\wallframe.iss
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Install, open and uninstall
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.number }}
+        run: |
+          Start-Process "dist/wallframe-$env:VERSION-setup.exe" -ArgumentList "/VERYSILENT", "/CURRENTUSER", "/NORESTART" -Wait
+          $installed = "$env:LOCALAPPDATA\Programs\wallframe"
+          packaging/windows/smoke.ps1 $installed
+          Start-Process "$installed\unins000.exe" -ArgumentList "/VERYSILENT", "/NORESTART" -Wait
+          Start-Sleep -Seconds 5
+          if (Test-Path "$installed\wallframe.exe") { throw "the uninstaller left wallframe.exe" }
+
+      - name: Keep the files
+        uses: actions/upload-artifact@v4
+        with:
+          name: wallframe-windows
+          path: |
+            dist/*.exe
+            dist/*.zip
+          if-no-files-found: error
+
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create $env:GITHUB_REF_NAME (Get-ChildItem dist -File).FullName --generate-notes

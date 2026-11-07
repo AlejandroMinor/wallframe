@@ -1,0 +1,2 @@
+# bash cannot read a script with Windows line ends, and the runner checks out with them.
+*.sh text eol=lf

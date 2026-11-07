@@ -51,9 +51,11 @@ Optional:
 
 ### Windows (experimental)
 
-Windows 10 and 11 work in progress: wallframe sets each monitor's own wallpaper through Windows itself, without awww. It has not been tried on a real Windows desk yet, so expect rough edges, and say what you find in an issue.
+Windows 10 and 11 work in progress: wallframe sets each monitor's own wallpaper through Windows itself, without awww. It has been tried on a desk of three monitors at 100%, so expect rough edges with mixed scales and virtual desktops, and say what you find in an issue.
 
-There is no installer yet. To run it from source, install [MSYS2](https://www.msys2.org), open its **UCRT64** shell and install GTK and Python there:
+Download `wallframe-…-setup.exe` from [Releases](https://github.com/AlejandroMinor/wallframe/releases) and run it: it needs no administrator, and nothing else installed. There is also a portable zip: unpack it anywhere and open `wallframe.exe`. The files are not signed yet, so Windows may warn the first time: **More info**, then **Run anyway**.
+
+To run it from source, install [MSYS2](https://www.msys2.org), open its **UCRT64** shell and install GTK and Python there:
 
 ```bash
 pacman -S mingw-w64-ucrt-x86_64-gtk4 mingw-w64-ucrt-x86_64-python-gobject \
