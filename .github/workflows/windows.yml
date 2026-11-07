@@ -47,6 +47,42 @@ jobs:
                   print("wallpaper:", path, "refused:", error)
           EOF
 
+      # The whole app, as a user starts it: it should open and keep running.
+      # timeout stops it after 20 seconds (status 124); any other end is a crash.
+      - name: Open wallframe
+        run: |
+          status=0
+          timeout 20 python -u wallframe > wallframe.log 2>&1 || status=$?
+          cat wallframe.log
+          if [ "$status" != 124 ] || grep -q Traceback wallframe.log; then
+            echo "wallframe did not keep running (status $status)"
+            exit 1
+          fi
+
+      # What Apply does at its end: set a crop on the monitor, then read it back.
+      - name: Set a wallpaper and read it back
+        env:
+          PYTHONPATH: src
+        run: |
+          python - <<'EOF'
+          import os
+          from PIL import Image
+          from wallframe import windows
+          system = windows.Desktop().system
+          shell = windows.Wallpaper(system)
+          outputs = shell.outputs()
+          print("outputs:", outputs)
+          before = outputs[0]
+          crop = os.path.join(os.environ["RUNNER_TEMP"], "wallframe-crop.png")
+          Image.new("RGB", (before.width, before.height), (40, 90, 160)).save(crop)
+          shell.set_image(before.name, crop)
+          shown = system.wallpaper(shell.paths[before.name])
+          print("shown:", shown)
+          assert os.path.normcase(shown) == os.path.normcase(crop), shown
+          shell.set_image(before.name, before.image)  # as it was
+          print("restored:", system.wallpaper(shell.paths[before.name]))
+          EOF
+
       # Verbose, so a test that hangs is the last one named; past a minute, it also
       # prints where it is stuck.
       - name: Tests
