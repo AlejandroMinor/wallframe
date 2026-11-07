@@ -1,6 +1,6 @@
 # wallframe
 
-Drag, zoom, mirror and rotate your wallpaper inside each monitor's frame, or one picture across all of them, and save layouts for all your monitors. A GTK4 editor for awww and swww on Wayland.
+Drag, zoom, mirror and rotate your wallpaper inside each monitor's frame, or one picture across all of them, and save layouts for all your monitors. A GTK4 editor for awww and swww on Wayland, for KDE Plasma and for Windows.
 
 Wallpaper daemons scale the image to fill the screen and cut off the parts that do not fit. They always keep the center. On a portrait monitor, a landscape image can lose more than half of its width, and often the part you wanted to see. wallframe shows the frame of each monitor over the image, so you can choose which part to keep.
 
@@ -14,7 +14,7 @@ Wallpaper daemons scale the image to fill the screen and cut off the parts that 
 
 ## Requirements
 
-One of these, on Wayland:
+One of these, on Wayland, or [Windows](#windows-experimental):
 
 - A compositor that awww or swww runs on: Hyprland, sway, niri, river, Wayfire and the like. It is tested on Hyprland.
 - KDE Plasma 6. Plasma draws its own wallpaper, so wallframe sets it through Plasma, one per screen, without awww. `kscreen-doctor`, part of Plasma, gives each screen its output name, scale and place. Tested on Plasma 6.7.
@@ -46,7 +46,7 @@ Fedora, Debian and Ubuntu do not package awww or swww. On their Plasma editions 
 Optional:
 
 - Hyprland or sway: wallframe opens on the focused monitor and shows the model of each monitor.
-- [Upscayl](https://github.com/upscayl/upscayl): the **Upscale** panel enlarges low-resolution images ×2, ×3 or ×4 before cropping, on one monitor or all of them at once. You can compare the result with the original at real size, and go back to the original at any time. It needs a Vulkan GPU, and the native package: on Arch, `upscayl-bin` from the AUR; elsewhere, the official .deb or .rpm. The Flatpak and AppImage do not work.
+- [Upscayl](https://github.com/upscayl/upscayl): the **Upscale** panel enlarges low-resolution images ×2, ×3 or ×4 before cropping, on one monitor or all of them at once. You can compare the result with the original at real size, and go back to the original at any time. It needs a Vulkan GPU, and the native package: on Arch, `upscayl-bin` from the AUR; elsewhere, the official .deb or .rpm; on Windows, the official installer. The Flatpak and AppImage do not work.
 - `libnotify`: errors appear as notifications, which helps when you start wallframe without a terminal. On Hyprland, errors appear as Hyprland notifications even without it.
 
 ### Windows (experimental)
@@ -74,6 +74,7 @@ What is different on Windows:
 - A monitor showing a color, or a picture that is gone, opens with a black picture: choose one and frame it.
 - If the fit in Windows' own settings is **Span**, Apply changes it to **Fill**: Span shows one picture across every monitor, and would hide each monitor's own.
 - With more than one virtual desktop, Windows 11 may keep one wallpaper per virtual desktop instead of one per monitor.
+- If a monitor comes or changes size, close wallframe and open it again: it reads the monitors when it opens.
 
 ## Install
 
@@ -162,7 +163,7 @@ A dot on a monitor button means that the monitor does not show your changes yet.
 
 wallframe saves the crops in `~/.local/share/wallframe/`. It does not use the cache folder, because the daemon loads the crops from there again at login. When you open wallframe again, each monitor starts from the original image with your last framing, so the image does not lose quality. Animated and video wallpapers are not supported.
 
-The **Layouts** panel saves what every monitor shows: the picture and its framing. Each layout has a preview of your monitors as they stand on the desk (on Hyprland and sway; elsewhere side by side). Click a layout to show it on the monitors at once; the one they show is marked. Its menu renames it, saves the current wallpapers into it, duplicates it or deletes it. **Random layout**, below the list, switches to a random layout, never the one the monitors show now. Layouts point at your pictures: if one was moved or deleted, that monitor stays as it was and wallframe says why, with the path where the picture was. **Replace picture…** lets you choose another picture, and the layout keeps it with the same framing.
+The **Layouts** panel saves what every monitor shows: the picture and its framing. Each layout has a preview of your monitors as they stand on the desk (on Hyprland, sway, Plasma and Windows; elsewhere side by side). Click a layout to show it on the monitors at once; the one they show is marked. Its menu renames it, saves the current wallpapers into it, duplicates it or deletes it. **Random layout**, below the list, switches to a random layout, never the one the monitors show now. Layouts point at your pictures: if one was moved or deleted, that monitor stays as it was and wallframe says why, with the path where the picture was. **Replace picture…** lets you choose another picture, and the layout keeps it with the same framing.
 
 ![The Layouts panel with six saved layouts, one of them marked as the one the monitors show](docs/layouts.webp)
 
@@ -174,7 +175,7 @@ The **Span** button, after the monitor buttons, frames one picture across every 
 
 Monitors of different sizes and resolutions line up too. wallframe reads each monitor's real size from its EDID, so the picture keeps the same size across a 27" 1440p and a 24" 1080p, and a line that crosses from one to the other does not jump. The status bar says "real sizes" when it could read them all, or "desktop sizes" when it could not. To match how the monitors really stand on your desk, see [Matching the span to your desk](#matching-the-span-to-your-desk).
 
-Span needs to know where the monitors are, so it is there on Hyprland, sway and Plasma, with two monitors or more. A layout saved from the span brings the span back. Editing one monitor on its own takes that monitor out of the span; Apply on the span puts it back.
+Span needs to know where the monitors are, so it is there on Hyprland, sway, Plasma and Windows, with two monitors or more. A layout saved from the span brings the span back. Editing one monitor on its own takes that monitor out of the span; Apply on the span puts it back.
 
 wallframe opens on the focused monitor, or on the span when the monitors show it. To start on a different monitor, give its output name: `wallframe DP-1`; for the span, `wallframe span`.
 
@@ -248,7 +249,7 @@ Leave it empty to run nothing. If the command fails, the status bar shows a warn
 
 ## Development
 
-The tests cover everything except the window: framing, cropping, saved state and reading the daemon and compositor output. They do not need a display or a wallpaper daemon. If `node` is installed, the scripts wallframe sends to Plasma also run, against a stand-in for Plasma:
+The tests cover framing, cropping, saved state, reading the daemon and compositor output, and the window's logic. They need no wallpaper daemon, and the ones that build the real window are skipped without a display. If `node` is installed, the scripts wallframe sends to Plasma also run, against a stand-in for Plasma:
 
 ```bash
 python -m venv --system-site-packages .venv
@@ -256,6 +257,8 @@ python -m venv --system-site-packages .venv
 PYTHONPATH=src .venv/bin/pytest
 ```
 
+GitHub Actions runs them on Linux and Windows. Pushing a tag like `v1.2.3` builds the Windows installer and portable zip and publishes them as a release; `packaging/windows` has how.
+
 ## License
 
-GPL-3.0-or-later. See [LICENSE](LICENSE).
+GPL-3.0-or-later. See [LICENSE](LICENSE). The Windows package also carries the licenses of what it bundles, in `THIRD-PARTY.txt` and the `licenses` folder.
