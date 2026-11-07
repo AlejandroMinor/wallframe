@@ -14,7 +14,7 @@ class Arrangements:
     def load(self):
         """{name: entry}; empty when missing or unreadable."""
         try:
-            with open(self.path) as f:
+            with open(self.path, encoding="utf-8") as f:
                 found = json.load(f)
         except (OSError, ValueError):
             return {}
@@ -44,7 +44,7 @@ class Arrangements:
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         temporary = self.path + ".tmp"  # swapped in, so a failure keeps the old file whole
         try:
-            with open(temporary, "w") as f:
+            with open(temporary, "w", encoding="utf-8") as f:
                 json.dump(found, f, indent=2)
             os.replace(temporary, self.path)
         except OSError:

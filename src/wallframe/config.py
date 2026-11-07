@@ -28,7 +28,7 @@ def _read(path):
     """The file's parser; empty when the file is missing or broken."""
     parser = configparser.ConfigParser(interpolation=None)
     try:
-        parser.read(path or CONFIG_FILE)
+        parser.read(path or CONFIG_FILE, encoding="utf-8")
     except (configparser.Error, UnicodeDecodeError):
         return configparser.ConfigParser(interpolation=None)
     return parser
@@ -102,7 +102,7 @@ def save(values, path=None):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     temporary = path + ".tmp"  # swapped in, so a failure keeps the old file whole
     try:
-        with open(temporary, "w") as f:
+        with open(temporary, "w", encoding="utf-8") as f:
             parser.write(f)
         os.replace(temporary, path)
     except OSError:

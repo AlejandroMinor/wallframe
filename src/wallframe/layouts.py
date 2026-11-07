@@ -56,7 +56,7 @@ class Layouts:
             if name.endswith(".json") and not name.endswith(".tmp.json"):
                 path = os.path.join(self.directory, name)
                 try:
-                    with open(path) as f:
+                    with open(path, encoding="utf-8") as f:
                         layouts.append(Layout(path, json.load(f)))
                 except (OSError, ValueError, KeyError):
                     continue
@@ -134,7 +134,7 @@ class Layouts:
 
 
 def _dump(data, path):
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
 

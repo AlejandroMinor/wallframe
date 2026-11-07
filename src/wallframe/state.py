@@ -25,7 +25,7 @@ class Store:
     def load(self):
         """The saved state; empty when missing or unreadable."""
         try:
-            with open(self.state_file) as f:
+            with open(self.state_file, encoding="utf-8") as f:
                 return json.load(f)
         except (OSError, ValueError):
             return {}
@@ -88,7 +88,7 @@ class Store:
         # empty it first, and a failure halfway would lose every monitor's entry.
         temporary = self.state_file + ".tmp"
         try:
-            with open(temporary, "w") as f:
+            with open(temporary, "w", encoding="utf-8") as f:
                 json.dump(state, f, indent=2)
             os.replace(temporary, self.state_file)
         except OSError:

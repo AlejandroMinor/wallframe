@@ -1,5 +1,7 @@
 """Tests for config.ini: always a file in a temporary folder."""
 
+import sys
+
 import pytest
 
 from wallframe import config
@@ -7,7 +9,7 @@ from wallframe import config
 
 def write(tmp_path, text):
     path = tmp_path / "config.ini"
-    path.write_text(text)
+    path.write_text(text, encoding="utf-8")
     return str(path)
 
 
@@ -23,6 +25,11 @@ def test_no_command_when_missing_or_broken(tmp_path, text):
     assert config.post_command(str(tmp_path / "missing.ini")) == ""
 
 
+posix_shell = pytest.mark.skipif(sys.platform == "win32", reason="cmd.exe, see the next tests")
+windows_shell = pytest.mark.skipif(sys.platform != "win32", reason="cmd.exe is Windows' own")
+
+
+@posix_shell
 def test_the_command_gets_the_wallpaper_and_monitors(tmp_path):
     out = tmp_path / "out"
     config.run_post_command(f'echo "$wallpaper|$WALLFRAME_WALLPAPER|$WALLFRAME_MONITORS" > {out}',
@@ -30,11 +37,36 @@ def test_the_command_gets_the_wallpaper_and_monitors(tmp_path):
     assert out.read_text() == "/pics/a b.png|/pics/a b.png|DP-1,DP-2\n"
 
 
+@posix_shell
 def test_a_failing_command_says_why():
     with pytest.raises(OSError, match="post_command failed: nope"):
         config.run_post_command("echo starting; echo nope >&2; exit 3", "/a.png", ["DP-1"])
     with pytest.raises(OSError, match="exit 4"):
         config.run_post_command("exit 4", "/a.png", ["DP-1"])
+
+
+@windows_shell
+def test_on_windows_the_command_runs_in_cmd_with_the_same_variables(tmp_path):
+    out = tmp_path / "out"
+    config.run_post_command(f'echo %wallpaper%;%WALLFRAME_WALLPAPER%;%WALLFRAME_MONITORS%>"{out}"',
+                            r"C:\pics\a b.png", ["DEL40F3", "GSM5B7F"])
+    assert out.read_text().strip() == r"C:\pics\a b.png;C:\pics\a b.png;DEL40F3,GSM5B7F"
+
+
+@windows_shell
+def test_on_windows_a_failing_command_says_why():
+    with pytest.raises(OSError, match="post_command failed: nope"):
+        config.run_post_command("echo starting& echo nope>&2& exit 3", "C:/a.png", ["DEL40F3"])
+    with pytest.raises(OSError, match="exit 4"):
+        config.run_post_command("exit 4", "C:/a.png", ["DEL40F3"])
+
+
+def test_a_path_in_any_alphabet_is_saved_and_read_back(tmp_path):
+    """UTF-8 on every system: Windows' own code page has no room for most alphabets."""
+    path = write(tmp_path, "[Settings]\n")
+    config.save({"wallpaper_folder": "~/Imágenes/壁紙"}, path)
+    assert config.get("wallpaper_folder", path) == "~/Imágenes/壁紙"
+    assert "壁紙" in open(path, encoding="utf-8").read()
 
 
 def test_save_keeps_the_rest_of_the_file(tmp_path):
