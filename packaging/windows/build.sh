@@ -49,6 +49,7 @@ cp -r src/wallframe "$out/app/"
 find "$out/app" -name __pycache__ -type d -prune -exec rm -rf {} +
 cp "$here/start.py" "$out/wallframe.py"
 cp LICENSE "$out/"
+bash "$here/licenses.sh" "$out"
 python -m compileall -q "$out/lib/$python" "$out/app" || true  # a file it cannot read is run as it is
 
 if [ -z "${WALLFRAME_NO_LAUNCHER:-}" ]; then
