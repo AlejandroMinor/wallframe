@@ -12,6 +12,7 @@ import re
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
+from . import edid
 from .commands import run
 from .compositors import CompositorInfo
 from .daemons import Output
@@ -222,3 +223,6 @@ class Desktop:
     def wallpaper(self):
         shell = Plasma()
         return shell if shell.outputs() else None
+
+    def sizes(self):
+        return edid.sizes()

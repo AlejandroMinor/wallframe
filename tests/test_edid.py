@@ -42,3 +42,26 @@ def test_connectors_are_named_like_the_outputs(tmp_path):
     (tmp_path / "renderD128").mkdir()
     assert edid.sizes(tmp_path) == {"DP-1": (597, 336), "eDP-1": (309, 173)}
     assert edid.sizes(tmp_path / "missing") == {}
+
+
+def named(text, slot=1):
+    """An EDID whose descriptor `slot` (0 to 3) is the monitor's name."""
+    data = bytearray(fake(597, 336))
+    start = 54 + 18 * slot
+    data[start:start + 5] = b"\x00\x00\x00\xfc\x00"
+    data[start + 5:start + 18] = (text.encode() + b"\n").ljust(13, b" ")[:13]
+    return bytes(data)
+
+
+def test_the_name_comes_from_its_descriptor_without_the_newline_and_padding():
+    assert edid.name(named("DELL U2720Q")) == "DELL U2720Q"
+    assert edid.name(named("LG HDR 4K", slot=3)) == "LG HDR 4K"
+
+
+def test_a_name_of_thirteen_characters_has_no_newline():
+    assert edid.name(named("ABCDEFGHIJKLM")) == "ABCDEFGHIJKLM"
+
+
+def test_without_a_name_descriptor_there_is_no_name():
+    assert edid.name(fake(597, 336)) == ""
+    assert edid.name(b"") == ""

@@ -44,3 +44,19 @@ def sizes(directory=DRM_DIR):
         if size:
             found[match[1]] = size
     return found
+
+
+def name(edid):
+    """The monitor's model as it names itself, like "DELL U2720Q", or "" when it does not.
+
+    One of the four 18-byte descriptors after the timings may be the name: it
+    starts with three zero bytes and the tag 0xFC, and its text ends at a
+    newline. Windows has no other place that tells the model.
+    """
+    if len(edid) < 128 or edid[:8] != b"\x00\xff\xff\xff\xff\xff\xff\x00":
+        return ""
+    for start in range(54, 126, 18):
+        block = edid[start:start + 18]
+        if block[:3] == b"\x00\x00\x00" and block[3] == 0xFC:
+            return block[5:].split(b"\n")[0].decode("cp437").strip()
+    return ""

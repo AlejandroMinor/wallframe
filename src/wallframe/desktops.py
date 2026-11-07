@@ -2,15 +2,17 @@
 
 Each desktop gives the same three things: whether its session is this one,
 what it says about the monitors (focused, models, places), and what sets the
-wallpaper. awww or swww do it on Hyprland, sway and the like; Plasma does it
-itself. A new desktop is one more entry in DESKTOPS.
+wallpaper. awww or swww do it on Hyprland, sway and the like; Plasma and
+Windows do it themselves. Each also says how big the monitors really are (see
+edid.py). A new desktop is one more entry in DESKTOPS.
 """
 
 import os
 
-from . import compositors, plasma
+from . import compositors, plasma, windows
 
-DESKTOPS = (plasma.Desktop(), compositors.HYPRLAND, compositors.SWAY)
+# Windows sets no XDG_CURRENT_DESKTOP, so it is known by the system itself.
+DESKTOPS = (windows.Desktop(), plasma.Desktop(), compositors.HYPRLAND, compositors.SWAY)
 
 
 def detect():

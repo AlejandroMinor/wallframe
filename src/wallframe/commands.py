@@ -129,9 +129,16 @@ def run_reporting(cmd, report=None, cancel=None):
 
 
 def notify(message):
-    """Prints the error and shows it with notify-send, or with Hyprland if missing."""
+    """Prints the error and shows it with notify-send, or with Hyprland if missing.
+
+    On Windows, in a message box: started from the Start menu, there is no
+    terminal to print to.
+    """
     print(f"wallframe: {message}", file=sys.stderr)
-    if shutil.which("notify-send"):
+    if sys.platform == "win32":
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(None, message, "wallframe", 0x10)  # MB_ICONERROR
+    elif shutil.which("notify-send"):
         run(["notify-send", "wallframe", message])
     elif os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
         # Error icon, 5000 ms, default color.

@@ -2,7 +2,7 @@
 
 import pytest
 
-from wallframe import compositors, daemons, desktops, plasma
+from wallframe import compositors, daemons, desktops, edid, plasma, windows
 from wallframe.daemons import Output
 
 
@@ -46,3 +46,15 @@ def test_compositors_use_awww_and_plasma_its_own(monkeypatch):
     assert isinstance(compositors.HYPRLAND.wallpaper(), daemons.Daemon)
     assert isinstance(compositors.OTHER.wallpaper(), daemons.Daemon)
     assert isinstance(plasma.Desktop().wallpaper(), plasma.Plasma)
+
+
+def test_windows_is_known_by_the_system_not_by_a_variable(session, monkeypatch):
+    monkeypatch.setattr(windows.sys, "platform", "win32")
+    assert isinstance(desktops.detect(), windows.Desktop)
+
+
+def test_every_desktop_says_how_big_the_monitors_are(monkeypatch):
+    """From /sys on Linux; windows.py reads the registry (see test_windows.py)."""
+    monkeypatch.setattr(edid, "sizes", lambda: {"DP-1": (597, 336)})
+    for desktop in (compositors.HYPRLAND, compositors.OTHER, plasma.Desktop()):
+        assert desktop.sizes() == {"DP-1": (597, 336)}

@@ -7,9 +7,17 @@ from .commands import Cancelled, run_reporting
 from .state import DATA_DIR
 
 # Upscayl's command-line engine, where its packages put it: the AUR package
-# (upscayl-bin) links it into the PATH, the official .deb and .rpm keep it in /opt.
-_PROGRAMS = ("upscayl-ncnn", "upscayl-bin", "/opt/Upscayl/resources/bin/upscayl-bin")
-_MODEL_DIRS = ("/usr/share/upscayl/models", "/opt/Upscayl/resources/models")
+# (upscayl-bin) links it into the PATH, the official .deb and .rpm keep it in /opt,
+# and its Windows installer in the user's programs, or in Program Files for everyone.
+_WINDOWS_HOMES = [os.path.join(os.environ[variable], *place)
+                  for variable, place in (("LOCALAPPDATA", ("Programs", "Upscayl")),
+                                          ("ProgramFiles", ("Upscayl",)))
+                  if os.environ.get(variable)]
+_PROGRAMS = ("upscayl-ncnn", "upscayl-bin", "/opt/Upscayl/resources/bin/upscayl-bin",
+             *(os.path.join(home, "resources", "bin", "upscayl-bin.exe")
+               for home in _WINDOWS_HOMES))
+_MODEL_DIRS = ("/usr/share/upscayl/models", "/opt/Upscayl/resources/models",
+               *(os.path.join(home, "resources", "models") for home in _WINDOWS_HOMES))
 # (model file name, name shown), best first; only the installed ones are offered.
 MODELS = [
     ("upscayl-standard-4x", "Standard"),
@@ -28,6 +36,7 @@ INSTALL_HELP = (
     "Upscayl is not installed. wallframe uses its engine to upscale with AI.\n\n"
     "Arch Linux: install upscayl-bin from the AUR.\n"
     "Debian, Ubuntu, Fedora: install the .deb or .rpm from Upscayl's releases.\n"
+    "Windows: install the .exe from Upscayl's releases.\n"
     "The Flatpak and AppImage keep the engine inside, so wallframe cannot use them.\n\n"
     "It needs a GPU with Vulkan.")
 RELEASES_URL = "https://github.com/upscayl/upscayl/releases"

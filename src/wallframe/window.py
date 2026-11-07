@@ -1,4 +1,5 @@
 import os
+import sys
 import threading
 import time
 
@@ -161,7 +162,11 @@ def system_accent():
     """The desktop's accent as a CSS color, or None when it sets none.
 
     Asked of the desktop portal first; GNOME's setting holds only a name.
+    Windows keeps its own in the registry.
     """
+    if sys.platform == "win32":
+        from . import windows
+        return windows.Desktop().accent()
     try:
         bus = Gio.bus_get_sync(Gio.BusType.SESSION)
         reply = bus.call_sync(

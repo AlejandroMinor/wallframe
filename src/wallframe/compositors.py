@@ -4,7 +4,7 @@ import json
 import os
 from dataclasses import dataclass, field
 
-from . import daemons
+from . import daemons, edid
 from .commands import run
 
 
@@ -82,6 +82,9 @@ class Compositor:
 
     def wallpaper(self):
         return daemons.detect()
+
+    def sizes(self):
+        return edid.sizes()
 
 
 HYPRLAND = Compositor("hyprland", "HYPRLAND_INSTANCE_SIGNATURE", ["hyprctl", "monitors", "-j"])
