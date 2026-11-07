@@ -1,7 +1,11 @@
-"""The wallpaper folder for the picker: its pictures, newest first, and their thumbnails."""
+"""The wallpaper folder for the picker: its pictures, newest first, and their thumbnails.
+
+Also the editor's previews of big pictures, kept the same way beside the thumbnails.
+"""
 
 import hashlib
 import os
+import threading
 import time
 
 from PIL import Image
@@ -33,11 +37,18 @@ def pictures(folder, subfolders=False):
     return [path for _newest, path in sorted(found)]
 
 
+def previews_dir():
+    """Where the editor keeps its previews of big pictures: reading one from there is
+    ten times quicker than reading the picture. Beside the thumbnails, so it follows
+    CACHE_DIR."""
+    return os.path.join(os.path.dirname(CACHE_DIR), "previews")
+
+
 def cached(path, cache=None):
     """The thumbnail of `path` when it was made already, else None; quick, it only
     looks at the file's date and size."""
     try:
-        thumb = _thumb_path(path, cache)
+        thumb = cache_file(path, cache)
     except OSError:
         return None
     if not os.path.exists(thumb):
@@ -54,7 +65,7 @@ def _touch(thumb):
         pass
 
 
-def _thumb_path(path, cache):
+def cache_file(path, cache=None):
     """Where the thumbnail of `path` is kept: named by the picture's path, date and
     size, so a changed picture gets a new one."""
     status = os.stat(path)
@@ -67,7 +78,7 @@ def thumbnail(path, cache=None):
 
     Raises OSError when the picture cannot be read.
     """
-    thumb = _thumb_path(path, cache)
+    thumb = cache_file(path, cache)
     if os.path.exists(thumb):
         _touch(thumb)
         return thumb
@@ -83,6 +94,20 @@ def thumbnail(path, cache=None):
     small.save(temporary, "PNG")
     os.replace(temporary, thumb)
     return thumb
+
+
+def store(image, destination):
+    """Saves `image` as the PNG `destination` (see cache_file), written aside and swapped
+    in: another thread may be reading the one there."""
+    os.makedirs(os.path.dirname(destination), exist_ok=True)
+    temporary = f"{destination}.{threading.get_ident()}.tmp"
+    try:
+        image.save(temporary, "PNG", compress_level=1)  # quick; still lossless
+        os.replace(temporary, destination)
+    except OSError:
+        if os.path.exists(temporary):
+            os.remove(temporary)
+        raise
 
 
 def prune(days=UNUSED_DAYS, cache=None):
