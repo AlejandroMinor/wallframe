@@ -1,4 +1,5 @@
-"""The user's settings in ~/.config/wallframe/config.ini, set in the window or by hand.
+"""The user's settings in ~/.config/wallframe/config.ini (on Windows, in
+%APPDATA%\\wallframe), set in the window or by hand.
 
 Read on each use, so a change takes effect without restarting wallframe.
 
@@ -14,8 +15,9 @@ import configparser
 import os
 import subprocess
 
-CONFIG_FILE = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
-                           "wallframe", "config.ini")
+from . import paths
+
+CONFIG_FILE = os.path.join(paths.config_dir(), "config.ini")
 SECTION = "Settings"
 # A short fade: soft, without keeping the new framing waiting.
 TRANSITION_TYPE = "fade"

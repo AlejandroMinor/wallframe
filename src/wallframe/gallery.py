@@ -6,8 +6,9 @@ import time
 
 from PIL import Image
 
-CACHE_DIR = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"),
-                         "wallframe", "thumbnails")
+from . import paths
+
+CACHE_DIR = os.path.join(paths.cache_dir(), "thumbnails")
 THUMB_SIZE = (240, 150)  # the most a thumbnail takes, keeping the picture's shape
 # Still pictures only, told by the name so a big folder lists at once. GIFs are left
 # out: most are animated, and a cropped frame would freeze them.

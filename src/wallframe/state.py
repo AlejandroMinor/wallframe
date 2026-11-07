@@ -3,9 +3,10 @@ import os
 import re
 import time
 
+from . import paths
+
 # Not ~/.cache: the daemon loads the crops from here at login.
-DATA_DIR = os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"),
-                        "wallframe")
+DATA_DIR = paths.data_dir()
 # state.json's entry for the span (see span.py), beside the monitors' own;
 # no output is named so.
 SPAN = "span"
