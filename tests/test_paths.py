@@ -31,10 +31,15 @@ def home(tmp_path, monkeypatch):
     return tmp_path
 
 
+def same(found, *expected):
+    """Equal as paths: Python on Windows mixes its own slash with the ones it was given."""
+    return os.path.normpath(found) == os.path.normpath(os.path.join(*expected))
+
+
 def test_linux_uses_the_xdg_folders_in_the_home_by_default(home):
-    assert paths.config_dir(windows=False) == os.path.join(home, ".config", "wallframe")
-    assert paths.data_dir(windows=False) == os.path.join(home, ".local/share", "wallframe")
-    assert paths.cache_dir(windows=False) == os.path.join(home, ".cache", "wallframe")
+    assert same(paths.config_dir(windows=False), home, ".config", "wallframe")
+    assert same(paths.data_dir(windows=False), home, ".local/share", "wallframe")
+    assert same(paths.cache_dir(windows=False), home, ".cache", "wallframe")
 
 
 def test_linux_follows_the_xdg_variables(home, monkeypatch):
@@ -57,5 +62,5 @@ def test_windows_keeps_the_settings_in_appdata_and_the_rest_in_localappdata(home
 
 
 def test_windows_without_its_variables_still_lands_in_the_profile(home):
-    assert paths.config_dir(windows=True) == os.path.join(home, "AppData/Roaming", "wallframe")
-    assert paths.data_dir(windows=True) == os.path.join(home, "AppData/Local", "wallframe")
+    assert same(paths.config_dir(windows=True), home, "AppData/Roaming", "wallframe")
+    assert same(paths.data_dir(windows=True), home, "AppData/Local", "wallframe")
