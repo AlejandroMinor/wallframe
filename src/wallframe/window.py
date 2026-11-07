@@ -142,16 +142,33 @@ def run(monitors, daemon, start, focused, upscaler=None, layouts=None, positions
         span=None):
     """Opens the editor on monitors[start], or on the span when start is past them,
     and returns the exit status."""
-    app = Gtk.Application(application_id=APP_ID)
+    app = Gtk.Application(application_id=application_id())
     app.connect("startup", lambda _app: add_style())
-    app.connect("activate", lambda _app: Window(app, monitors, daemon, start, focused,
-                                                upscaler, layouts, positions, span).present())
+    app.connect("activate", lambda _app: show_once(
+        app, lambda: Window(app, monitors, daemon, start, focused, upscaler, layouts,
+                            positions, span)))
     return app.run([])
 
 
+def application_id():
+    """The id Gtk.Application looks for itself by on the session bus. Windows has no such
+    bus: GLib starts one of its own, and has been seen to wait on it for good."""
+    return None if sys.platform == "win32" else APP_ID
+
+
+def show_once(app, make):
+    """Opens the window, or on a second start brings the one there is forward: two
+    windows would edit the same monitors."""
+    windows = app.get_windows()
+    (windows[0] if windows else make()).present()
+
+
 def add_style():
-    """The status bar colors and wallframe's own icons, once per display."""
+    """The status bar colors, the dark mode and wallframe's own icons, once per display."""
     display = Gdk.Display.get_default()
+    if system_dark():
+        Gtk.Settings.get_for_display(display).set_property("gtk-application-prefer-dark-theme",
+                                                           True)
     provider = Gtk.CssProvider()
     provider.load_from_string(accent_css(system_accent()) + STYLE)
     Gtk.StyleContext.add_provider_for_display(
@@ -167,6 +184,14 @@ def accent_css(accent):
     if accent:
         return f"@define-color wallframe_accent mix({accent}, @theme_fg_color, 0.35);\n"
     return "@define-color wallframe_accent mix(@theme_selected_bg_color, @theme_fg_color, 0.5);\n"
+
+
+def system_dark():
+    """True on a Windows in dark mode. GTK follows the desktop on its own on Linux."""
+    if sys.platform != "win32":
+        return False
+    from . import windows
+    return windows.Desktop().dark()
 
 
 def system_accent():

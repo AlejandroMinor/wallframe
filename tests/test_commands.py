@@ -27,6 +27,29 @@ def on_linux(monkeypatch):
     monkeypatch.setattr(commands.sys, "platform", "linux")
 
 
+def test_no_program_opens_a_console_window(monkeypatch):
+    """From wallframe.exe, each one would flash a console on the screen."""
+    monkeypatch.setattr(commands, "NO_WINDOW", {"creationflags": 8})
+    seen = []
+
+    def run(cmd, **kwargs):
+        seen.append(kwargs.get("creationflags"))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def popen(cmd, **kwargs):
+        seen.append(kwargs.get("creationflags"))
+        process = MagicMock(stdout=io.StringIO(""))
+        process.wait.return_value = 0
+        return process
+
+    monkeypatch.setattr(commands.subprocess, "run", run)
+    monkeypatch.setattr(commands.subprocess, "Popen", popen)
+    commands.run(["a"])
+    commands.run_or_fail(["b"])
+    commands.run_reporting(["c"])
+    assert seen == [8, 8, 8]
+
+
 def test_windows_shows_a_message_box(monkeypatch, calls, no_message_box, capsys):
     monkeypatch.setattr(commands.sys, "platform", "win32")
     monkeypatch.setattr(commands.shutil, "which", lambda name: "/usr/bin/" + name)

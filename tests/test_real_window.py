@@ -18,7 +18,7 @@ from gi.repository import Gio, Gtk  # noqa: E402
 from test_span import two_monitors  # noqa: E402
 from wallframe import span  # noqa: E402
 from wallframe.layouts import Layouts  # noqa: E402
-from wallframe.window import Window  # noqa: E402
+from wallframe.window import Window, application_id  # noqa: E402
 
 if not Gtk.init_check():
     pytest.skip("the real window needs a display", allow_module_level=True)
@@ -59,7 +59,7 @@ def in_window(tmp_path, body, with_span=True):
             failure.append(error)
         app.quit()
 
-    app = Gtk.Application(application_id="io.github.AlejandroMinor.wallframe.tests",
+    app = Gtk.Application(application_id=application_id() and "io.github.wallframe.tests",
                           flags=Gio.ApplicationFlags.NON_UNIQUE)
     app.connect("activate", activate)
     app.run([])

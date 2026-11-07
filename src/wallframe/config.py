@@ -16,6 +16,7 @@ import os
 import subprocess
 
 from . import paths
+from .commands import NO_WINDOW
 
 CONFIG_FILE = os.path.join(paths.config_dir(), "config.ini")
 SECTION = "Settings"
@@ -119,7 +120,8 @@ def run_post_command(command, wallpaper, monitors):
     """
     env = dict(os.environ, wallpaper=wallpaper, WALLFRAME_WALLPAPER=wallpaper,
                WALLFRAME_MONITORS=",".join(monitors))
-    done = subprocess.run(command, shell=True, env=env, capture_output=True, text=True)
+    done = subprocess.run(command, shell=True, env=env, capture_output=True, text=True,
+                          **NO_WINDOW)
     if done.returncode:
         lines = [line for line in done.stderr.splitlines() if line.strip()]
         reason = lines[-1].strip() if lines else f"exit {done.returncode}"

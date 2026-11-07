@@ -14,4 +14,3 @@ $outside = $running.Modules.FileName | Where-Object { $_ -like "*msys64*" }
 if ($outside) { throw "wallframe loaded DLLs from MSYS2: $outside" }
 Write-Host "wallframe runs with $($running.Modules.Count) modules, none from MSYS2"
 $running | Stop-Process -Force
-Get-Process gdbus -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$folder*" } | Stop-Process -Force

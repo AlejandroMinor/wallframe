@@ -25,6 +25,7 @@ from .daemons import Output
 if sys.platform == "win32":
     from . import win32
     win32.aware()  # before GTK opens a window, so imported with desktops.py
+    win32.no_session_bus()
 
 # (device path, (x, y, width, height) in physical pixels, scale such as 1.5)
 Screen = namedtuple("Screen", "path rect scale")
@@ -170,3 +171,11 @@ class Desktop:
 
     def accent(self):
         return accent_color(self.system.accent())
+
+    def dark(self):
+        return self.system.dark()
+
+    def already_open(self):
+        """True when another wallframe runs, whose window came forward: Windows has no
+        session bus for Gtk.Application to find it on (see window.application_id)."""
+        return self.system.already_open()

@@ -5,6 +5,10 @@ import subprocess
 import sys
 import threading
 
+# Started from wallframe.exe there is no console, so Windows would open one for each
+# program, flashing on the screen. What subprocess needs to keep it from doing so.
+NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
+
 
 def run(cmd):
     """Returns the command's stdout, or "" if the program is missing.
@@ -13,7 +17,7 @@ def run(cmd):
     that is not there is noticed.
     """
     try:
-        return subprocess.run(cmd, capture_output=True, text=True).stdout
+        return subprocess.run(cmd, capture_output=True, text=True, **NO_WINDOW).stdout
     except OSError:
         return ""
 
@@ -28,7 +32,7 @@ def run_or_fail(cmd):
     monitors by catching one.
     """
     try:
-        done = subprocess.run(cmd, capture_output=True, text=True)
+        done = subprocess.run(cmd, capture_output=True, text=True, **NO_WINDOW)
     except OSError as error:  # the program is missing or cannot be started
         raise OSError(None, f"{cmd[0]} could not be started: {error.strerror}") from error
     if done.returncode:
@@ -108,7 +112,7 @@ def run_reporting(cmd, report=None, cancel=None):
         raise Cancelled
     try:
         done = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                text=True, bufsize=1)
+                                text=True, bufsize=1, **NO_WINDOW)
     except OSError as error:
         raise OSError(None, f"{cmd[0]} could not be started: {error.strerror}") from error
     if cancel:

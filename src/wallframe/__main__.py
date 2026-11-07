@@ -13,6 +13,8 @@ from .state import Store
 
 def main():
     desktop = desktops.detect()
+    if desktop.name == "windows" and desktop.already_open():
+        return 0
     daemon = desktop.wallpaper()
     if not daemon:
         notify("No image wallpaper found.")

@@ -10,13 +10,16 @@ IDesktopWallpaper knows it, and also where its EDID is in the registry.
 """
 
 import ctypes
+import os
 import uuid
 import winreg
 from contextlib import contextmanager
 from ctypes import wintypes
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 shcore = ctypes.WinDLL("shcore")
+shell32 = ctypes.WinDLL("shell32")
 ole32 = ctypes.WinDLL("ole32")
 
 # The shell's wallpaper object and its interface (shobjidl_core.h).
@@ -34,6 +37,12 @@ _MDT_EFFECTIVE_DPI = 0
 _MONITOR_DEFAULTTONEAREST = 2
 _EDD_GET_DEVICE_INTERFACE_NAME = 1
 _DISPLAY_DEVICE_ACTIVE = 1
+_ERROR_ALREADY_EXISTS = 183
+_SW_RESTORE = 9
+# How the taskbar knows wallframe from any other Python, and the installer's shortcuts too.
+APP_USER_MODEL_ID = "AlejandroMinor.wallframe"
+_THEME_KEY = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+_held = []  # the mutex of the running wallframe, which ends with the process
 
 
 class MONITORINFOEXW(ctypes.Structure):
@@ -50,6 +59,7 @@ class DISPLAY_DEVICEW(ctypes.Structure):
 
 _MONITORENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HMONITOR, wintypes.HDC,
                                       ctypes.POINTER(wintypes.RECT), wintypes.LPARAM)
+_WINDOWENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
 user32.EnumDisplayMonitors.argtypes = [wintypes.HDC, ctypes.c_void_p, _MONITORENUMPROC,
                                        wintypes.LPARAM]
@@ -59,6 +69,16 @@ user32.EnumDisplayDevicesW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD,
 user32.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
 user32.MonitorFromPoint.restype = wintypes.HMONITOR
 user32.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
+user32.EnumWindows.argtypes = [_WINDOWENUMPROC, wintypes.LPARAM]
+user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+user32.IsIconic.argtypes = [wintypes.HWND]
+user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
+kernel32.CreateMutexW.restype = wintypes.HANDLE
+shell32.SetCurrentProcessExplicitAppUserModelID.argtypes = [wintypes.LPCWSTR]
+shell32.SetCurrentProcessExplicitAppUserModelID.restype = ctypes.HRESULT
 shcore.GetDpiForMonitor.argtypes = [wintypes.HMONITOR, ctypes.c_int,
                                     ctypes.POINTER(wintypes.UINT), ctypes.POINTER(wintypes.UINT)]
 shcore.GetDpiForMonitor.restype = ctypes.HRESULT
@@ -83,6 +103,32 @@ def aware():
         user32.SetProcessDpiAwarenessContext(_PER_MONITOR_AWARE_V2)
     except AttributeError:  # before Windows 10 1703
         pass
+    shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
+
+
+def no_session_bus():
+    """Tells GLib there is no session bus. Windows has none, so showing a window would
+    start gdbus.exe to be one, which nothing here uses, outlives wallframe for a moment,
+    and has been seen to leave GTK waiting for good."""
+    os.environ.setdefault("DBUS_SESSION_BUS_ADDRESS", "disabled:")
+
+
+def _open_window():
+    """wallframe's window, by title and GDK's window class, or None: a folder or a
+    browser tab can be called wallframe too."""
+    found = []
+
+    def look(handle, _data):
+        title, kind = ctypes.create_unicode_buffer(16), ctypes.create_unicode_buffer(64)
+        user32.GetWindowTextW(handle, title, 16)
+        user32.GetClassNameW(handle, kind, 64)
+        if title.value == "wallframe" and kind.value.lower().startswith("gdk"):
+            found.append(handle)
+            return False
+        return True
+
+    user32.EnumWindows(_WINDOWENUMPROC(look), 0)
+    return found[0] if found else None
 
 
 def _guid(text):
@@ -205,6 +251,31 @@ class System:
         except OSError:
             return b""
         return bytes(value)
+
+    @staticmethod
+    def already_open():
+        """True when wallframe is running already, whose window comes forward. Otherwise
+        this process holds the mutex that says so, until it ends."""
+        ctypes.set_last_error(0)
+        mutex = kernel32.CreateMutexW(None, False, f"Local\\{APP_USER_MODEL_ID}")
+        if ctypes.get_last_error() != _ERROR_ALREADY_EXISTS:
+            _held.append(mutex)
+            return False
+        window = _open_window()
+        if window:
+            if user32.IsIconic(window):
+                user32.ShowWindow(window, _SW_RESTORE)
+            user32.SetForegroundWindow(window)
+        return True
+
+    @staticmethod
+    def dark():
+        """True when the user chose the dark mode for apps."""
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _THEME_KEY) as opened:
+                return winreg.QueryValueEx(opened, "AppsUseLightTheme")[0] == 0
+        except OSError:
+            return False
 
     @staticmethod
     def accent():

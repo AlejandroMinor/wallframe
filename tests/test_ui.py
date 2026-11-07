@@ -19,7 +19,7 @@ from test_real_window import SIZES, Daemon  # noqa: E402
 from test_span import two_monitors  # noqa: E402
 from wallframe import config, span  # noqa: E402
 from wallframe.layouts import Layouts  # noqa: E402
-from wallframe.window import Window  # noqa: E402
+from wallframe.window import Window, application_id  # noqa: E402
 
 pytestmark = pytest.mark.ui
 
@@ -75,7 +75,7 @@ def walk(tmp_path, steps):
 
         GLib.timeout_add(PAUSE, run, 0)
 
-    app = Gtk.Application(application_id="io.github.AlejandroMinor.wallframe.ui",
+    app = Gtk.Application(application_id=application_id() and "io.github.wallframe.ui",
                           flags=Gio.ApplicationFlags.NON_UNIQUE)
     app.connect("activate", activate)
     app.run([])

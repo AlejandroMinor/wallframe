@@ -20,11 +20,37 @@ from wallframe.layouts import Layouts  # noqa: E402
 from wallframe.monitor import Monitor, has_preview  # noqa: E402
 from wallframe.state import Store  # noqa: E402
 from wallframe.window import (EXPORT_MENU, LABEL_SIZE, NUDGE, NUDGE_SHIFT, Scaled,  # noqa: E402
-                              Window, accent_css, build_menu, centimeter_labels, on_main, stamp)
+                              Window, accent_css, build_menu, centimeter_labels, on_main,
+                              show_once, stamp)
 from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
 NO_DAEMON = "wallframe-no-existe-este-programa"
 REDRAW_PRIORITY = GLib.PRIORITY_HIGH_IDLE + 20  # GDK_PRIORITY_REDRAW
+
+
+def test_a_second_start_brings_the_window_forward_and_opens_no_other():
+    class Shown:
+        presented = 0
+
+        def present(self):
+            self.presented += 1
+
+    class App:
+        windows = []
+
+        def get_windows(self):
+            return self.windows
+
+    app, made = App(), []
+
+    def make():
+        made.append(Shown())
+        app.windows.append(made[-1])
+        return made[-1]
+
+    show_once(app, make)
+    show_once(app, make)
+    assert len(made) == 1 and made[0].presented == 2
 
 
 def test_work_from_a_thread_reaches_a_window_that_never_stops_redrawing():

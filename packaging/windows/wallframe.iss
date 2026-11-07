@@ -33,8 +33,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "..\..\dist\wallframe\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
 
 [Icons]
-Name: "{autoprograms}\wallframe"; Filename: "{app}\wallframe.exe"
-Name: "{autodesktop}\wallframe"; Filename: "{app}\wallframe.exe"; Tasks: desktopicon
+Name: "{autoprograms}\wallframe"; Filename: "{app}\wallframe.exe"; AppUserModelID: "AlejandroMinor.wallframe"
+Name: "{autodesktop}\wallframe"; Filename: "{app}\wallframe.exe"; AppUserModelID: "AlejandroMinor.wallframe"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\wallframe.exe"; Description: "{cm:LaunchProgram,wallframe}"; Flags: nowait postinstall skipifsilent

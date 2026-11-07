@@ -36,6 +36,12 @@ class FakeWindows:
     def accent(self):
         return self._accent
 
+    def dark(self):
+        return True
+
+    def already_open(self):
+        return True
+
     def wallpaper(self, path):
         if path not in self.pictures:
             raise OSError(None, "unknown monitor")
@@ -121,6 +127,11 @@ def test_set_image_shows_the_crop_on_that_monitor_only(tmp_path):
     crop = tmp_path / "crop.png"
     shell.set_image("GSM5B7F", str(crop))
     assert system.set == [(LG, str(crop))]
+
+
+def test_the_desktop_says_what_windows_says_of_the_dark_mode_and_a_running_wallframe():
+    desktop = Desktop(FakeWindows([]))
+    assert desktop.dark() and desktop.already_open()
 
 
 def test_set_image_on_a_monitor_that_is_gone_raises():
