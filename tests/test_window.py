@@ -140,6 +140,7 @@ class StandIn:
         self.upscaling = {}
         self.flashed, self.reported = [], []
         self.applying = None
+        self.desk_told = False
         self.opening = {}
         self.apply_when_opened = False
         self.busy = []  # every set_busy() call, to see the window paused and resumed
@@ -1060,3 +1061,30 @@ def test_a_second_apply_waits_for_the_first(tmp_path):
     window.applying = "the changes"
     Window.apply(window)                     # it would reach the daemon and raise
     assert window.flashed == []
+
+
+class Reported(StandIn):
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.told = []
+
+    def report(self, message, detail, action=None):
+        self.told.append(message)
+
+
+def test_a_monitor_of_another_size_or_a_new_one_is_told_once(tmp_path):
+    """Its crops would be of the size it had, without a word."""
+    monitor = monitor_on(tmp_path, "DP-1", 90, 160, wallpaper(tmp_path))
+    window = Reported([monitor], UntouchableDaemon())
+    Window.tell_if_the_desk_changed(window, {"DP-1": Output("DP-1", 90, 160, "/a.png")})
+    assert window.told == []
+    Window.tell_if_the_desk_changed(window, {"DP-1": Output("DP-1", 180, 320, "/a.png")})
+    Window.tell_if_the_desk_changed(window, {"DP-1": Output("DP-1", 180, 320, "/a.png")})
+    assert window.told == ["The monitors changed"]
+
+
+def test_a_monitor_unplugged_is_left_to_apply_to_tell(tmp_path):
+    monitor = monitor_on(tmp_path, "DP-1", 90, 160, wallpaper(tmp_path))
+    window = Reported([monitor], UntouchableDaemon())
+    Window.tell_if_the_desk_changed(window, {})
+    assert window.told == []

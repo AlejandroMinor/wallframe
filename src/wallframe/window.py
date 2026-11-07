@@ -444,6 +444,7 @@ class Window(Gtk.ApplicationWindow):
         self.held = None      # the canvas's (scale, origin) while it is dragged
         self.opening = {}     # monitor name -> picture being read for it, off the main thread
         self.apply_when_opened = False  # Apply asked for while a picture was being read
+        self.desk_told = False  # said already that the monitors changed
 
         # Size against the monitor the window opens on; without knowing which,
         # the smallest one, so it fits wherever it lands.
@@ -2708,6 +2709,7 @@ class Window(Gtk.ApplicationWindow):
         `then` runs once every question is answered, and not at all if one is dismissed.
         """
         current = {output.name: output for output in self.daemon.outputs()}
+        self.tell_if_the_desk_changed(current)
         conflicts, reloaded = [], []
         # An edited span would replace every monitor's wallpaper, so it asks too.
         span_edited = self.spanning and self.span.touched
@@ -2727,6 +2729,16 @@ class Window(Gtk.ApplicationWindow):
             self.flash(f"New wallpaper loaded on {', '.join(m.name for m in reloaded)}",
                        "success")
         self.ask_next(conflicts, then)
+
+    def tell_if_the_desk_changed(self, current):
+        """Says once that a monitor came or changed size since wallframe opened: the
+        monitors are read then, so the crops would be of the size they had."""
+        sizes = {m.name: (m.width, m.height) for m in self.monitors}
+        if not self.desk_told and any(sizes.get(name) != (output.width, output.height)
+                                      for name, output in current.items()):
+            self.desk_told = True
+            self.report("The monitors changed",
+                        "Close wallframe and open it again to frame them as they are now.")
 
     def reload(self, monitor, output):
         """Starts editing what the monitor shows now; False when it cannot be read, as a
