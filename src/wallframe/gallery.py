@@ -91,9 +91,9 @@ def thumbnail(path, cache=None):
             small = img.convert("RGBA" if img.mode in ("RGBA", "LA", "P") else "RGB")
     except (OSError, ValueError, Image.DecompressionBombError) as error:
         raise OSError(None, f"cannot read {os.path.basename(path)}") from error
-    temporary = thumb + ".tmp"  # another thread may be reading the finished one
+    temporary = f"{thumb}.{threading.get_ident()}.tmp"  # another thread may be reading it
     small.save(temporary, "PNG")
-    os.replace(temporary, thumb)
+    paths.replace(temporary, thumb)
     return thumb
 
 
@@ -104,7 +104,7 @@ def store(image, destination):
     temporary = f"{destination}.{threading.get_ident()}.tmp"
     try:
         image.save(temporary, "PNG", compress_level=1)  # quick; still lossless
-        os.replace(temporary, destination)
+        paths.replace(temporary, destination)
     except OSError:
         if os.path.exists(temporary):
             os.remove(temporary)

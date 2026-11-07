@@ -101,6 +101,20 @@ def test_clean_keeps_only_what_is_in_use(tmp_path, fake_upscayl):
     assert os.listdir(tmp_path / "upscaled") == [os.path.basename(used)]
 
 
+def test_clean_leaves_a_copy_in_use_for_next_time(tmp_path, fake_upscayl, monkeypatch):
+    """It runs at the end of Apply, which a file Windows holds must not stop."""
+    up = upscaler(tmp_path)
+    copy = up.upscale(picture(tmp_path, "a.png"), MODEL, 2)
+
+    def locked(path):
+        raise PermissionError(13, "in use by another process", path)
+
+    with monkeypatch.context() as patched:
+        patched.setattr(os, "remove", locked)
+        up.clean(keep=set())
+    assert os.path.exists(copy)
+
+
 # Everything upscayl-ncnn printed for a 1024x640 image, minus the emojis it
 # decorates its lines with, which are not in any test but this one. Four lines
 # of Vulkan device banner starting with "[0 ", two resize notes with the sizes

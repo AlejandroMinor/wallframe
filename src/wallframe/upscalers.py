@@ -3,6 +3,7 @@ import os
 import re
 import shutil
 
+from . import paths
 from .commands import Cancelled, run_reporting
 from .state import DATA_DIR
 
@@ -73,7 +74,7 @@ class Upscaler:
         try:
             run_reporting([self.program, "-i", source, "-o", partial, "-m", self.models_dir,
                            "-n", model, "-s", str(scale)], report, cancel=cancel)
-            os.replace(partial, path)
+            paths.replace(partial, path)
         except (OSError, Cancelled):
             if os.path.exists(partial):
                 os.remove(partial)
@@ -86,8 +87,11 @@ class Upscaler:
             return
         for name in os.listdir(self.directory):
             path = os.path.join(self.directory, name)
-            if path not in keep:
-                os.remove(path)
+            if not any(paths.same_file(path, kept) for kept in keep):
+                try:
+                    os.remove(path)
+                except PermissionError:
+                    pass  # in use on Windows, as the file Upscayl is writing: next time
 
 
 def percent(line):

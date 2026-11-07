@@ -2,6 +2,7 @@
 
 import io
 import subprocess
+import sys
 from unittest.mock import MagicMock
 
 import pytest
@@ -48,6 +49,13 @@ def test_no_program_opens_a_console_window(monkeypatch):
     commands.run_or_fail(["b"])
     commands.run_reporting(["c"])
     assert seen == [8, 8, 8]
+
+
+def test_a_byte_no_encoding_knows_does_not_end_the_job():
+    """Upscayl prints the path, and a name like Áurea stopped it for good on Windows."""
+    speaks = r"import sys; sys.stdout.buffer.write(b'one \xc3\x81 \x81\xff\n')"
+    assert commands.run_reporting([sys.executable, "-c", speaks]).startswith("one ")
+    assert commands.run([sys.executable, "-c", speaks]).startswith("one ")
 
 
 def test_windows_shows_a_message_box(monkeypatch, calls, no_message_box, capsys):

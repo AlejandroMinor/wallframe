@@ -7,6 +7,21 @@ and %LOCALAPPDATA% for the crops and thumbnails, which belong to this machine.
 
 import os
 import sys
+import time
+
+REPLACE_TRIES, REPLACE_WAIT = 20, 0.05  # a second at most, and only when something holds it
+
+
+def replace(source, target):
+    """os.replace, waiting a moment for whoever holds `target` on Windows: there a file
+    someone has open cannot be replaced, and an antivirus or the indexer open them all."""
+    for _ in range(REPLACE_TRIES if sys.platform == "win32" else 0):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            time.sleep(REPLACE_WAIT)
+    os.replace(source, target)
 
 
 def same_file(one, other):

@@ -93,7 +93,7 @@ class Store:
         try:
             with open(temporary, "w", encoding="utf-8") as f:
                 json.dump(state, f, indent=2)
-            os.replace(temporary, self.state_file)
+            paths.replace(temporary, self.state_file)
         except OSError:
             if os.path.exists(temporary):
                 os.remove(temporary)

@@ -64,3 +64,30 @@ def test_windows_keeps_the_settings_in_appdata_and_the_rest_in_localappdata(home
 def test_windows_without_its_variables_still_lands_in_the_profile(home):
     assert same(paths.config_dir(windows=True), home, "AppData/Roaming", "wallframe")
     assert same(paths.data_dir(windows=True), home, "AppData/Local", "wallframe")
+
+
+def replacing_after(failures, monkeypatch):
+    """Makes os.replace fail `failures` times as Windows does, then work; gives the calls."""
+    calls = []
+
+    def fake(source, target):
+        calls.append(source)
+        if len(calls) <= failures:
+            raise PermissionError(13, "in use by another process", target)
+
+    monkeypatch.setattr(paths.os, "replace", fake)
+    monkeypatch.setattr(paths.sys, "platform", "win32")
+    monkeypatch.setattr(paths, "REPLACE_WAIT", 0)
+    return calls
+
+
+def test_a_file_held_for_a_moment_is_replaced_all_the_same(monkeypatch):
+    calls = replacing_after(3, monkeypatch)
+    paths.replace("new", "old")
+    assert len(calls) == 4
+
+
+def test_a_file_held_for_good_says_so(monkeypatch):
+    replacing_after(1000, monkeypatch)
+    with pytest.raises(PermissionError):
+        paths.replace("new", "old")

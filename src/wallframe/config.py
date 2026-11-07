@@ -105,7 +105,7 @@ def save(values, path=None):
     try:
         with open(temporary, "w", encoding="utf-8") as f:
             parser.write(f)
-        os.replace(temporary, path)
+        paths.replace(temporary, path)
     except OSError:
         if os.path.exists(temporary):
             os.remove(temporary)
@@ -121,7 +121,7 @@ def run_post_command(command, wallpaper, monitors):
     env = dict(os.environ, wallpaper=wallpaper, WALLFRAME_WALLPAPER=wallpaper,
                WALLFRAME_MONITORS=",".join(monitors))
     done = subprocess.run(command, shell=True, env=env, capture_output=True, text=True,
-                          **NO_WINDOW)
+                          errors="replace", **NO_WINDOW)
     if done.returncode:
         lines = [line for line in done.stderr.splitlines() if line.strip()]
         reason = lines[-1].strip() if lines else f"exit {done.returncode}"

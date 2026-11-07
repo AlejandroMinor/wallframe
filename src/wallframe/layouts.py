@@ -5,7 +5,7 @@ import time
 
 from PIL import Image
 
-from . import render
+from . import paths, render
 from .state import DATA_DIR
 
 LAYOUTS_DIR = os.path.join(DATA_DIR, "layouts")
@@ -145,7 +145,7 @@ def _replace(path, write):
     temporary = f"{stem}.tmp{extension}"  # the extension tells Pillow the format
     try:
         write(temporary)
-        os.replace(temporary, path)
+        paths.replace(temporary, path)
     except OSError:
         if os.path.exists(temporary):
             os.remove(temporary)

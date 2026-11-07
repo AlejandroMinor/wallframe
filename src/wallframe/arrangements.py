@@ -4,6 +4,8 @@ places and the angle each is turned, so a calibration is done once and kept."""
 import json
 import os
 
+from . import paths
+
 FILE = "arrangements.json"
 
 
@@ -46,7 +48,7 @@ class Arrangements:
         try:
             with open(temporary, "w", encoding="utf-8") as f:
                 json.dump(found, f, indent=2)
-            os.replace(temporary, self.path)
+            paths.replace(temporary, self.path)
         except OSError:
             if os.path.exists(temporary):
                 os.remove(temporary)
