@@ -1050,3 +1050,13 @@ def test_a_file_dialog_starts_beside_the_picture_or_in_the_folder_for_ones_own(t
     monkeypatch.setattr(config, "wallpaper_folder", lambda _default: "/fondos")
     monitor.original = os.path.join(monitor.store.directory, "blank-90x160.png")
     assert window.start_folder() == "/fondos"
+
+
+def test_a_second_apply_waits_for_the_first(tmp_path):
+    """A double click and Enter ran two at once: one's crops deleted the other's."""
+    monitor = monitor_on(tmp_path, "DP-1", 90, 160, wallpaper(tmp_path))
+    monitor.edit("rotate")
+    window = StandIn([monitor], UntouchableDaemon())
+    window.applying = "the changes"
+    Window.apply(window)                     # it would reach the daemon and raise
+    assert window.flashed == []

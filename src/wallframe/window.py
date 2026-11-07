@@ -2533,7 +2533,10 @@ class Window(Gtk.ApplicationWindow):
 
     def apply(self):
         """Checks for wallpapers changed elsewhere first, so none is overwritten unasked.
-        While a picture is being read, it waits for it."""
+        While a picture is being read, it waits for it. One at a time: the crops of one
+        Apply would delete those of another, still on their way to the monitors."""
+        if self.applying:
+            return
         if self.opening:
             self.apply_when_opened = True
             return
